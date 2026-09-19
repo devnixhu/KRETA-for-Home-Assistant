@@ -7,6 +7,6 @@
   "config_flow": true,
   "documentation": "https://github.com/devnixhu/KRETA-for-Home-Assistant",
   "issue_tracker": "https://github.com/devnixhu/KRETA-for-Home-Assistant/issues",
-  "version": "1.7.1",
+  "version": "1.7.3",
   "iot_class": "cloud_polling"
 }
