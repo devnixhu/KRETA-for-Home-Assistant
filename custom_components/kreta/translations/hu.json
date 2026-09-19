@@ -1,0 +1,68 @@
+{
+  "title": "KRÉTA Secure",
+  "config": {
+    "step": {
+      "user": {
+        "title": "KRÉTA Secure beállítása",
+        "description": "Add meg egy tanulói fiók belépési adatait. A jelszót a sikeres belépés után nem tároljuk.",
+        "data": {
+          "klik_id": "KLIK azonosito",
+          "user_id": "Felhasznaloi azonosito",
+          "password": "Jelszo",
+          "refresh_minutes": "Frissítési időköz (perc)",
+          "lookahead_weeks": "Naptári előretekintés (hét)"
+        }
+      },
+      "two_factor": {
+        "title": "Kétfaktoros hitelesítés",
+        "description": "Add meg a hitelesítő alkalmazás aktuális kódját vagy egy fel nem használt helyreállító kódot. A kódot egyszer használjuk és nem tároljuk.",
+        "data": {"two_factor_code": "Hitelesítő kód"}
+      },
+      "reauth_confirm": {
+        "title": "Kreta ujrahitelesitese",
+        "description": "Add meg az uj jelszot ehhez a fiokhoz: {user_id} ({klik_id}).",
+        "data": {
+          "password": "Jelszo"
+        }
+      },
+      "reconfigure": {
+        "title": "Kreta ujrabeallitasa",
+        "description": "Frissitsd a Kreta fiok belepesi adatait.",
+        "data": {
+          "klik_id": "KLIK azonosito",
+          "user_id": "Felhasznaloi azonosito",
+          "password": "Jelszo"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nem sikerult kapcsolodni a Kretahoz.",
+      "invalid_auth": "Sikertelen hitelesítés.",
+      "invalid_two_factor": "A hitelesítő kód hibás vagy lejárt.",
+      "invalid_institution": "Az intézményi azonosító érvénytelen.",
+      "unknown": "Varatlan hiba tortent."
+    },
+    "abort": {
+      "already_configured": "Ez a tanuloi fiok mar be van allitva.",
+      "reauth_successful": "Az ujrahitelesites sikeres volt.",
+      "reconfigure_successful": "Az ujrabeallitas sikeres volt."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Kreta beallitasok",
+        "data": {
+          "refresh_minutes": "Frissítési időköz (perc)",
+          "lookahead_weeks": "Naptári előretekintés (hét)",
+          "timetable": "Órarend",
+          "grades": "Érdemjegyek",
+          "homework": "Házi feladatok",
+          "tests": "Számonkérések",
+          "messages": "Üzenetek (csak metaadat)",
+          "absences": "Mulasztások"
+        }
+      }
+    }
+  }
+}
