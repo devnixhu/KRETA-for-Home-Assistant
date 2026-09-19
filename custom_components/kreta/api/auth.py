@@ -50,6 +50,20 @@ def extract_two_factor_form(html: str) -> tuple[str, dict[str, str], str] | None
     return None
 
 
+def is_two_factor_route(url: str) -> bool:
+    """Return whether a validated URL looks like a KRÉTA 2FA login route.
+
+    This is only a routing hint. Callers must validate the URL against the
+    network policy first and must confirm the page by parsing an actual 2FA
+    form before accepting it as a challenge.
+    """
+    leaf = urlparse(url).path.rstrip("/").rsplit("/", 1)[-1].casefold()
+    compact = leaf.replace("-", "").replace("_", "")
+    has_factor_marker = "twofactor" in compact or "2fa" in compact
+    has_auth_marker = any(marker in compact for marker in ("login", "auth", "verify"))
+    return has_factor_marker and has_auth_marker
+
+
 REQUEST_VERIFICATION_TOKEN_RE = re.compile(
     r'name="__RequestVerificationToken"\s+type="hidden"\s+value="([^"]+)"'
 )

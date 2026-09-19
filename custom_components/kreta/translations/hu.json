@@ -1,66 +1,75 @@
 {
-  "title": "KRÉTA Secure",
+  "title": "KRÉTA",
+
   "config": {
     "step": {
       "user": {
-        "title": "KRÉTA Secure beállítása",
-        "description": "Add meg egy tanulói fiók belépési adatait. A jelszót a sikeres belépés után nem tároljuk.",
+        "title": "KRÉTA beállítása",
+        "description": "Add meg egy tanulói fiók belépési adatait.",
         "data": {
-          "klik_id": "KLIK azonosito",
-          "user_id": "Felhasznaloi azonosito",
-          "password": "Jelszo",
+          "klik_id": "KLIK-azonosító",
+          "user_id": "Felhasználói azonosító",
+          "password": "Jelszó",
           "refresh_minutes": "Frissítési időköz (perc)",
-          "lookahead_weeks": "Naptári előretekintés (hét)"
+          "lookahead_weeks": "Naptár előretekintése (hét)"
         }
       },
+
       "two_factor": {
-        "title": "Kétfaktoros hitelesítés",
-        "description": "Add meg a hitelesítő alkalmazás aktuális kódját vagy egy fel nem használt helyreállító kódot. A kódot egyszer használjuk és nem tároljuk.",
-        "data": {"two_factor_code": "Hitelesítő kód"}
-      },
-      "reauth_confirm": {
-        "title": "Kreta ujrahitelesitese",
-        "description": "Add meg az uj jelszot ehhez a fiokhoz: {user_id} ({klik_id}).",
+        "title": "Kétlépcsős azonosítás",
+        "description": "Add meg az aktuális hitelesítő kódot vagy egy még fel nem használt helyreállítási kódot. A kódot az integráció csak egyszer használja, és nem tárolja.",
         "data": {
-          "password": "Jelszo"
+          "two_factor_code": "Hitelesítési kód"
         }
       },
-      "reconfigure": {
-        "title": "Kreta ujrabeallitasa",
-        "description": "Frissitsd a Kreta fiok belepesi adatait.",
+
+      "reauth_confirm": {
+        "title": "KRÉTA-fiók újbóli hitelesítése",
+        "description": "Add meg az új jelszót ehhez a fiókhoz: {user_id} ({klik_id}).",
         "data": {
-          "klik_id": "KLIK azonosito",
-          "user_id": "Felhasznaloi azonosito",
-          "password": "Jelszo"
+          "password": "Jelszó"
+        }
+      },
+
+      "reconfigure": {
+        "title": "KRÉTA-fiók újrakonfigurálása",
+        "description": "Frissítsd a KRÉTA-fiók belépési adatait.",
+        "data": {
+          "klik_id": "KLIK-azonosító",
+          "user_id": "Felhasználói azonosító",
+          "password": "Jelszó"
         }
       }
     },
+
     "error": {
-      "cannot_connect": "Nem sikerult kapcsolodni a Kretahoz.",
-      "invalid_auth": "Sikertelen hitelesítés.",
-      "invalid_two_factor": "A hitelesítő kód hibás vagy lejárt.",
+      "cannot_connect": "Nem sikerült kapcsolódni a KRÉTA rendszerhez.",
+      "invalid_auth": "A hitelesítés sikertelen.",
+      "invalid_two_factor": "A hitelesítési kód érvénytelen vagy lejárt.",
       "invalid_institution": "Az intézményi azonosító érvénytelen.",
-      "unknown": "Varatlan hiba tortent."
+      "unknown": "Váratlan hiba történt."
     },
+
     "abort": {
-      "already_configured": "Ez a tanuloi fiok mar be van allitva.",
-      "reauth_successful": "Az ujrahitelesites sikeres volt.",
-      "reconfigure_successful": "Az ujrabeallitas sikeres volt."
+      "already_configured": "Ez a tanulói fiók már be van állítva.",
+      "reauth_successful": "Az újbóli hitelesítés sikeres volt.",
+      "reconfigure_successful": "Az újrakonfigurálás sikeres volt."
     }
   },
+
   "options": {
     "step": {
       "init": {
-        "title": "Kreta beallitasok",
+        "title": "KRÉTA beállítások",
         "data": {
           "refresh_minutes": "Frissítési időköz (perc)",
-          "lookahead_weeks": "Naptári előretekintés (hét)",
+          "lookahead_weeks": "Naptár előretekintése (hét)",
           "timetable": "Órarend",
           "grades": "Érdemjegyek",
           "homework": "Házi feladatok",
           "tests": "Számonkérések",
-          "messages": "Üzenetek (csak metaadat)",
-          "absences": "Mulasztások"
+          "messages": "Üzenetek (csak metaadatok)",
+          "absences": "Hiányzások"
         }
       }
     }

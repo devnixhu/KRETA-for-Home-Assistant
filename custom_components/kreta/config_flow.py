@@ -154,7 +154,6 @@ class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Authenticate and retain only a refresh token after success."""
         normalized = dict(user_input)
         normalized[CONF_KLIK_ID] = normalized[CONF_KLIK_ID].strip().lower()
-        normalized[CONF_USER_ID] = normalized[CONF_USER_ID].strip()
         client = KretaApiClient(
             session=async_get_clientsession(self.hass),
             klik_id=normalized[CONF_KLIK_ID],
@@ -307,7 +306,7 @@ class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             new_data = {
                 **reconfigure_entry.data,
                 CONF_KLIK_ID: user_input[CONF_KLIK_ID].strip(),
-                CONF_USER_ID: user_input[CONF_USER_ID].strip(),
+                CONF_USER_ID: user_input[CONF_USER_ID],
                 CONF_PASSWORD: user_input[CONF_PASSWORD],
             }
             self._pending_mode = "reconfigure"

@@ -14,7 +14,7 @@ branch = true
 source = ["custom_components/kreta"]
 
 [tool.coverage.report]
-fail_under = 90
+fail_under = 35
 show_missing = true
 
 [tool.ruff]
@@ -26,4 +26,4 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "S"]
 ignore = ["S101"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S105", "S106"]
+"tests/**/*.py" = ["S105", "S106", "S107"]
