@@ -25,7 +25,7 @@ from .api.models import (
     SchoolYearMilestone,
     StudentProfile,
 )
-from .api.storage import KretaBaselineStore, credential_key
+from .api.storage import KretaBaselineStore, entry_storage_key
 from .const import (
     CONF_ABSENCES,
     CONF_GRADES,
@@ -36,7 +36,6 @@ from .const import (
     CONF_REFRESH_MINUTES,
     CONF_TESTS,
     CONF_TIMETABLE,
-    CONF_USER_ID,
     DEFAULT_LOOKAHEAD_WEEKS,
     DEFAULT_REFRESH_HOURS,
     DEFAULT_REFRESH_MINUTES,
@@ -182,7 +181,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 else min(60, legacy_hours * 60)
             )
         self._baseline = KretaBaselineStore(
-            hass, credential_key(config_entry.data["klik_id"], config_entry.data[CONF_USER_ID])
+            hass, entry_storage_key(dict(config_entry.data))
         )
         super().__init__(
             hass,

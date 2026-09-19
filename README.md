@@ -166,13 +166,12 @@ A végeredmény például így nézzen ki:
 
 3. Keresd meg a **KRÉTA** integrációt.
 
-4. Add meg a szükséges adatokat:
+4. Add meg az intézményi azonosítót és a frissítési beállításokat.
+5. Nyisd meg a megjelenő hivatalos KRÉTA bejelentkezési hivatkozást.
+6. A KRÉTA oldalán végezd el a jelszavas és szükség esetén a kétlépcsős azonosítást.
+7. Másold vissza a Home Assistantba a böngészőben megnyitott teljes végső visszatérési URL-t.
 
-   - KRÉTA / intézményi azonosító
-   - felhasználónév
-   - jelszó
-   - frissítési időköz
-   - naptári időtartam
+A Home Assistant nem kapja meg a KRÉTA-felhasználónevet, a jelszót vagy a kétlépcsős azonosítási kódot. A visszatérési URL egyszer használható OAuth-kódját PKCE védi, és az integráció ellenőrzi a hostot, az útvonalat és a bejelentkezési kísérlethez tartozó `state` értéket.
 
 Több KRÉTA-fiók külön integrációs példányként adható hozzá.
 
@@ -305,14 +304,14 @@ A KRÉTA-fiók tanulmányi és személyes adatokat tartalmaz, ezért a hitelesí
 
 ## Adatkezelési alapelvek
 
-A projekt hosszú távú célja, hogy a lehető legkevesebb érzékeny adatot kezelje és tárolja.
+A projekt célja, hogy a lehető legkevesebb érzékeny adatot kezelje és tárolja.
 
 A tervezett alapelvek:
 
 - minimális adattárolás
 - csak szükséges adatok lekérése
 - lehetőség szerint csak read-only hozzáférés
-- hitelesítési adatok minimális tárolása
+- kizárólag a futáshoz szükséges refresh token tartós tárolása
 - érzékeny adatok kizárása a logokból
 - érzékeny adatok kizárása a diagnosztikából
 - nyers KRÉTA-válaszok tárolásának kerülése

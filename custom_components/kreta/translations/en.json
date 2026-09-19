@@ -4,48 +4,47 @@
     "step": {
       "user": {
         "title": "Set up KRÉTA",
-        "description": "Enter the credentials for one Student account.",
+        "description": "Authentication takes place on the official KRÉTA website. The integration never receives your password or two-factor authentication code.",
         "data": {
           "klik_id": "KLIK ID",
-          "user_id": "User ID",
-          "password": "Password",
           "refresh_minutes": "Refresh interval (minutes)",
           "lookahead_weeks": "Calendar lookahead (weeks)"
         }
       },
-      "two_factor": {
-        "title": "Two-factor authentication",
-        "description": "Enter the current authenticator or unused recovery code. It is used once and is never stored.",
-        "data": {"two_factor_code": "Authentication code"}
+      "oauth_callback": {
+        "title": "Sign in with KRÉTA",
+        "description": "Open the [official KRÉTA sign-in page]({authorization_url}), complete sign-in and two-factor authentication, then paste the complete final redirect URL here. The integration reads only the one-time OAuth data from it.",
+        "data": {
+          "oauth_redirect_url": "Redirect URL"
+        }
       },
       "reauth_confirm": {
         "title": "Re-authenticate KRÉTA",
-        "description": "Enter the new password for {user_id} ({klik_id}).",
-        "data": {
-          "password": "Password"
-        }
+        "description": "Continuing opens the official KRÉTA sign-in page. Home Assistant does not request a password or two-factor authentication code."
       },
       "reconfigure": {
         "title": "Reconfigure KRÉTA account",
-        "description": "Update the credentials for this KRÉTA account.",
+        "description": "A new KRÉTA OAuth sign-in is required to confirm this change.",
         "data": {
           "klik_id": "KLIK ID",
-          "user_id": "User ID",
-          "password": "Password"
+          "refresh_minutes": "Refresh interval (minutes)",
+          "lookahead_weeks": "Calendar lookahead (weeks)"
         }
       }
     },
     "error": {
       "cannot_connect": "Failed to connect to KRÉTA.",
-      "invalid_auth": "Authentication failed.",
-      "invalid_two_factor": "The authentication code was rejected or expired.",
       "invalid_institution": "The institution identifier is invalid.",
-      "unknown": "Unexpected error."
+      "oauth_state_mismatch": "The redirect URL does not belong to this sign-in attempt.",
+      "oauth_callback_invalid": "The redirect URL is invalid or does not use an official KRÉTA host.",
+      "oauth_code_missing": "The redirect URL does not contain an authorization code.",
+      "token_exchange_failed": "KRÉTA rejected the one-time authorization data. Start a new sign-in."
     },
     "abort": {
-      "already_configured": "This pupil account is already configured.",
+      "already_configured": "This KRÉTA account is already configured.",
       "reauth_successful": "Re-authentication was successful.",
-      "reconfigure_successful": "Reconfiguration was successful."
+      "reconfigure_successful": "Reconfiguration was successful.",
+      "oauth_start_failed": "The KRÉTA OAuth sign-in state expired. Start setup again."
     }
   },
   "options": {

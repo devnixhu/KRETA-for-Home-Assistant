@@ -8,13 +8,32 @@ from typing import Any, Protocol
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from ..const import BASELINE_STORAGE_KEY, STORAGE_KEY, STORAGE_VERSION
+from ..const import (
+    BASELINE_STORAGE_KEY,
+    CONF_ACCOUNT_KEY,
+    CONF_KLIK_ID,
+    CONF_USER_ID,
+    STORAGE_KEY,
+    STORAGE_VERSION,
+)
 
 
 def credential_key(institution: str, user_id: str) -> str:
     """Return a non-identifying stable key for one KRÉTA account."""
     normalized = f"{institution.strip().lower()}:{user_id.strip().lower()}"
     return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def entry_storage_key(data: dict[str, Any]) -> str:
+    """Return the new opaque account key or the legacy credential key."""
+    account_key = data.get(CONF_ACCOUNT_KEY)
+    if isinstance(account_key, str) and len(account_key) == 64:
+        return account_key
+    institution = data.get(CONF_KLIK_ID)
+    user_id = data.get(CONF_USER_ID)
+    if isinstance(institution, str) and isinstance(user_id, str):
+        return credential_key(institution, user_id)
+    raise ValueError("Config entry has no usable KRÉTA account key")
 
 
 class TokenStore(Protocol):

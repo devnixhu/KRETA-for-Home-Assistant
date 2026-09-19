@@ -10,7 +10,6 @@ from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 _REDACTED = "***"
 
-# Form fields whose values must never appear in diagnostic logs.
 _SENSITIVE_REQUEST_FIELDS = frozenset(
     {
         "password",
@@ -27,11 +26,9 @@ _SENSITIVE_REQUEST_FIELDS = frozenset(
     }
 )
 
-# JSON response keys whose values must never appear in diagnostic logs.
 _SENSITIVE_RESPONSE_FIELDS = frozenset({"access_token", "refresh_token", "id_token"})
 
-# URL query parameters that carry secret values.
-_SENSITIVE_URL_PARAMS = frozenset({"code", "code_verifier", "nonce"})
+_SENSITIVE_URL_PARAMS = frozenset({"code", "code_verifier", "nonce", "state"})
 
 _MAX_BODY_LENGTH = 500
 
@@ -60,8 +57,6 @@ def sanitize_response_body(body: str) -> str:
     try:
         obj = json.loads(stripped)
         if isinstance(obj, dict):
-            # Values may contain echoed credentials or personal data. Keys are
-            # sufficient for diagnosing a changed authentication schema.
             return json.dumps({"keys": sorted(str(key) for key in obj)[:30]})
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
@@ -82,7 +77,7 @@ def sanitize_redirect_url(url: str) -> str:
             sanitized_params, doseq=True, quote_via=lambda *a: quote(a[0], safe="*")
         )
         return parsed._replace(query=new_query).geturl()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return "(sanitization error)"
 
 

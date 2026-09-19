@@ -1,14 +1,14 @@
-"""Config flow for Kreta."""
+"""Config flow for browser-based KRÉTA OAuth."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.const import CONF_PASSWORD
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api.client import KretaApiClient
@@ -17,20 +17,25 @@ from .api.exceptions import (
     InvalidAuthError,
     KretaApiError,
     KretaSecurityError,
-    KretaTwoFactorRequired,
+    OAuthCallbackError,
+    OAuthCodeMissingError,
+    OAuthStateMismatchError,
 )
-from .api.storage import KretaTokenStore, MemoryTokenStore, credential_key
+from .api.oauth import build_authorization_url, extract_callback_code
+from .api.pkce import PkceAttempt
+from .api.storage import KretaTokenStore, MemoryTokenStore, entry_storage_key
 from .const import (
     CONF_ABSENCES,
+    CONF_ACCOUNT_KEY,
     CONF_GRADES,
     CONF_HOMEWORK,
     CONF_KLIK_ID,
     CONF_LOOKAHEAD_WEEKS,
     CONF_MESSAGES,
+    CONF_OAUTH_REDIRECT_URL,
     CONF_REFRESH_MINUTES,
     CONF_TESTS,
     CONF_TIMETABLE,
-    CONF_USER_ID,
     DEFAULT_LOOKAHEAD_WEEKS,
     DEFAULT_REFRESH_MINUTES,
     DOMAIN,
@@ -40,24 +45,24 @@ from .const import (
     MIN_REFRESH_MINUTES,
 )
 
+_LOGGER = logging.getLogger(__name__)
 
-def _build_user_schema(user_input: dict[str, Any] | None = None) -> vol.Schema:
-    """Build the user step schema."""
-    user_input = user_input or {}
+
+def _build_user_schema(data: Mapping[str, Any] | None = None) -> vol.Schema:
+    """Build the institution and scheduling form."""
+    values = data or {}
     return vol.Schema(
         {
-            vol.Required(CONF_KLIK_ID, default=user_input.get(CONF_KLIK_ID, "")): str,
-            vol.Required(CONF_USER_ID, default=user_input.get(CONF_USER_ID, "")): str,
-            vol.Required(CONF_PASSWORD, default=user_input.get(CONF_PASSWORD, "")): str,
+            vol.Required(CONF_KLIK_ID, default=values.get(CONF_KLIK_ID, "")): str,
             vol.Required(
                 CONF_REFRESH_MINUTES,
-                default=user_input.get(CONF_REFRESH_MINUTES, DEFAULT_REFRESH_MINUTES),
+                default=values.get(CONF_REFRESH_MINUTES, DEFAULT_REFRESH_MINUTES),
             ): vol.All(
                 vol.Coerce(int), vol.Range(min=MIN_REFRESH_MINUTES, max=MAX_REFRESH_MINUTES)
             ),
             vol.Required(
                 CONF_LOOKAHEAD_WEEKS,
-                default=user_input.get(CONF_LOOKAHEAD_WEEKS, DEFAULT_LOOKAHEAD_WEEKS),
+                default=values.get(CONF_LOOKAHEAD_WEEKS, DEFAULT_LOOKAHEAD_WEEKS),
             ): vol.All(
                 vol.Coerce(int),
                 vol.Range(min=MIN_LOOKAHEAD_WEEKS, max=MAX_LOOKAHEAD_WEEKS),
@@ -66,29 +71,13 @@ def _build_user_schema(user_input: dict[str, Any] | None = None) -> vol.Schema:
     )
 
 
-def _build_reauth_schema() -> vol.Schema:
-    """Build the re-authentication schema (password only)."""
-    return vol.Schema({vol.Required(CONF_PASSWORD): str})
-
-
-def _build_two_factor_schema() -> vol.Schema:
-    """Build the transient KRÉTA 2FA code form."""
-    return vol.Schema({vol.Required("two_factor_code"): str})
-
-
-def _build_reconfigure_schema(data: dict[str, Any]) -> vol.Schema:
-    """Build the reconfigure schema (credentials only, pre-filled)."""
-    return vol.Schema(
-        {
-            vol.Required(CONF_KLIK_ID, default=data.get(CONF_KLIK_ID, "")): str,
-            vol.Required(CONF_USER_ID, default=data.get(CONF_USER_ID, "")): str,
-            vol.Required(CONF_PASSWORD): str,
-        }
-    )
+def _build_callback_schema() -> vol.Schema:
+    """Build the one-time OAuth redirect URL form."""
+    return vol.Schema({vol.Required(CONF_OAUTH_REDIRECT_URL): str})
 
 
 def _build_options_schema(config_entry: config_entries.ConfigEntry) -> vol.Schema:
-    """Build the options schema."""
+    """Build the runtime options form."""
     options = config_entry.options
     return vol.Schema(
         {
@@ -105,7 +94,7 @@ def _build_options_schema(config_entry: config_entries.ConfigEntry) -> vol.Schem
                 CONF_LOOKAHEAD_WEEKS,
                 default=options.get(
                     CONF_LOOKAHEAD_WEEKS,
-                    config_entry.data[CONF_LOOKAHEAD_WEEKS],
+                    config_entry.data.get(CONF_LOOKAHEAD_WEEKS, DEFAULT_LOOKAHEAD_WEEKS),
                 ),
             ): vol.All(
                 vol.Coerce(int),
@@ -121,214 +110,180 @@ def _build_options_schema(config_entry: config_entries.ConfigEntry) -> vol.Schem
     )
 
 
-async def async_validate_input(hass: HomeAssistant, user_input: dict[str, Any]) -> dict[str, str]:
-    """Validate the user input allows us to connect."""
-    session = async_get_clientsession(hass)
-    client = KretaApiClient(
-        session=session,
-        klik_id=user_input[CONF_KLIK_ID],
-        user_id=user_input[CONF_USER_ID],
-        password=user_input[CONF_PASSWORD],
-        token_store=MemoryTokenStore(),
-    )
-    await client.async_authenticate(force_login=True)
-    profile = await client.async_get_student_profile()
-    return {
-        "title": profile.school_name or "KRÉTA Secure",
-        "student_name": "KRÉTA fiók",
-    }
-
-
 class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Kreta."""
+    """Handle browser-based KRÉTA OAuth setup and reauthentication."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
-        """Initialize transient authentication state."""
-        self._pending_client: KretaApiClient | None = None
-        self._pending_input: dict[str, Any] | None = None
+        """Initialize ephemeral authorization state."""
+        self._attempt: PkceAttempt | None = None
+        self._authorization_url: str | None = None
+        self._pending_data: dict[str, Any] = {}
         self._pending_mode = "user"
 
-    async def _async_authenticate(self, user_input: dict[str, Any]) -> dict[str, str]:
-        """Authenticate and retain only a refresh token after success."""
-        normalized = dict(user_input)
-        normalized[CONF_KLIK_ID] = normalized[CONF_KLIK_ID].strip().lower()
-        client = KretaApiClient(
-            session=async_get_clientsession(self.hass),
-            klik_id=normalized[CONF_KLIK_ID],
-            user_id=normalized[CONF_USER_ID],
-            password=normalized[CONF_PASSWORD],
-            token_store=KretaTokenStore(
-                self.hass,
-                credential_key(normalized[CONF_KLIK_ID], normalized[CONF_USER_ID]),
-            ),
-        )
-        self._pending_client = client
-        self._pending_input = normalized
-        await client.async_authenticate(force_login=True)
-        profile = await client.async_get_student_profile()
-        client.discard_password()
-        return {
-            "title": profile.school_name or "KRÉTA Secure",
-            "student_name": "KRÉTA fiók",
-        }
+    def _log_oauth_failure(self, stage: str) -> None:
+        """Log only a privacy-safe OAuth stage marker."""
+        _LOGGER.warning("KRÉTA OAuth stage failed: %s", stage)
 
-    def _entry_data_without_secrets(self) -> dict[str, Any]:
-        """Return pending config data without password or one-time codes."""
-        assert self._pending_input is not None
-        return {
-            key: value
-            for key, value in self._pending_input.items()
-            if key not in {CONF_PASSWORD, "two_factor_code"}
-        }
-
-    async def _async_finish_pending(self, info: dict[str, str]) -> config_entries.ConfigFlowResult:
-        """Create or update the entry after password/2FA authentication."""
-        data = self._entry_data_without_secrets()
-        unique_id = f"{data[CONF_KLIK_ID]}:{data[CONF_USER_ID].lower()}"
-        await self.async_set_unique_id(unique_id)
-        if self._pending_mode == "reauth":
-            self._abort_if_unique_id_mismatch()
-            return self.async_update_reload_and_abort(self._get_reauth_entry(), data=data)
-        if self._pending_mode == "reconfigure":
-            self._abort_if_unique_id_mismatch()
-            return self.async_update_reload_and_abort(self._get_reconfigure_entry(), data=data)
-        self._abort_if_unique_id_configured()
-        return self.async_create_entry(title=info["title"], data=data)
-
-    async def async_step_two_factor(
-        self, user_input: dict[str, Any] | None = None
+    def _begin_oauth(
+        self, data: Mapping[str, Any]
     ) -> config_entries.ConfigFlowResult:
-        """Complete a KRÉTA authenticator/recovery-code challenge."""
-        errors: dict[str, str] = {}
-        if user_input is not None and self._pending_client is not None:
-            try:
-                await self._pending_client.async_submit_two_factor(user_input["two_factor_code"])
-                profile = await self._pending_client.async_get_student_profile()
-                self._pending_client.discard_password()
-            except InvalidAuthError:
-                errors["base"] = "invalid_two_factor"
-            except CannotConnectError:
-                errors["base"] = "cannot_connect"
-            except KretaApiError:
-                errors["base"] = "unknown"
-            else:
-                return await self._async_finish_pending(
-                    {
-                        "title": profile.school_name or "KRÉTA Secure",
-                        "student_name": "KRÉTA fiók",
-                    }
-                )
+        """Create a new in-memory PKCE attempt and show the callback form."""
+        institution = str(data[CONF_KLIK_ID]).strip().lower()
+        self._pending_data = dict(data)
+        self._pending_data[CONF_KLIK_ID] = institution
+        self._attempt = PkceAttempt.create()
+        self._authorization_url = build_authorization_url(institution, self._attempt)
+        return self._show_oauth_callback()
+
+    def _show_oauth_callback(
+        self, errors: dict[str, str] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Show the safe fixed-redirect fallback form."""
         return self.async_show_form(
-            step_id="two_factor",
-            data_schema=_build_two_factor_schema(),
-            errors=errors,
+            step_id="oauth_callback",
+            data_schema=_build_callback_schema(),
+            description_placeholders={"authorization_url": self._authorization_url or ""},
+            errors=errors or {},
         )
+
+    async def _async_finish_oauth(
+        self, account_key: str, refresh_token: str, title: str
+    ) -> config_entries.ConfigFlowResult:
+        """Persist only the refresh token and finalize the config entry."""
+        institution = self._pending_data[CONF_KLIK_ID]
+        unique_id = f"{institution}:{account_key}"
+        await self.async_set_unique_id(unique_id)
+        target_entry: config_entries.ConfigEntry | None = None
+        if self._pending_mode == "reauth":
+            target_entry = self._get_reauth_entry()
+        elif self._pending_mode == "reconfigure":
+            target_entry = self._get_reconfigure_entry()
+        if target_entry is None:
+            self._abort_if_unique_id_configured()
+        elif CONF_ACCOUNT_KEY in target_entry.data:
+            self._abort_if_unique_id_mismatch()
+        old_storage_key = entry_storage_key(dict(target_entry.data)) if target_entry else None
+        token_store = KretaTokenStore(self.hass, account_key)
+        await token_store.async_set_refresh_token(refresh_token)
+        if old_storage_key and old_storage_key != account_key:
+            await KretaTokenStore(self.hass, old_storage_key).async_set_refresh_token(None)
+        data = {
+            CONF_KLIK_ID: institution,
+            CONF_ACCOUNT_KEY: account_key,
+            CONF_REFRESH_MINUTES: self._pending_data.get(
+                CONF_REFRESH_MINUTES, DEFAULT_REFRESH_MINUTES
+            ),
+            CONF_LOOKAHEAD_WEEKS: self._pending_data.get(
+                CONF_LOOKAHEAD_WEEKS, DEFAULT_LOOKAHEAD_WEEKS
+            ),
+        }
+        self._attempt = None
+        self._authorization_url = None
+        if target_entry is None:
+            return self.async_create_entry(title=title, data=data)
+        if CONF_ACCOUNT_KEY not in target_entry.data:
+            self.hass.config_entries.async_update_entry(target_entry, unique_id=unique_id)
+        return self.async_update_reload_and_abort(target_entry, data=data)
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Handle the user step."""
+        """Collect the institution and begin official KRÉTA login."""
         errors: dict[str, str] = {}
-
         if user_input is not None:
             self._pending_mode = "user"
             try:
-                info = await self._async_authenticate(user_input)
-            except KretaTwoFactorRequired:
-                return await self.async_step_two_factor()
-            except InvalidAuthError:
-                errors["base"] = "invalid_auth"
+                return self._begin_oauth(user_input)
             except KretaSecurityError:
                 errors["base"] = "invalid_institution"
-            except CannotConnectError:
-                errors["base"] = "cannot_connect"
-            except KretaApiError:
-                errors["base"] = "unknown"
-            else:
-                return await self._async_finish_pending(info)
-
+                self._log_oauth_failure("authorization_start")
         return self.async_show_form(
             step_id="user",
             data_schema=_build_user_schema(user_input),
             errors=errors,
         )
 
-    async def async_step_reauth(
-        self,
-        entry_data: Mapping[str, Any],  # noqa: ARG002
+    async def async_step_oauth_callback(
+        self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Initiate re-authentication after a credential failure."""
+        """Validate the pasted fixed mobile callback and exchange its code."""
+        if self._attempt is None or self._authorization_url is None:
+            return self.async_abort(reason="oauth_start_failed")
+        if user_input is None:
+            return self._show_oauth_callback()
+        try:
+            code = extract_callback_code(
+                user_input[CONF_OAUTH_REDIRECT_URL],
+                self._pending_data[CONF_KLIK_ID],
+                self._attempt.state,
+            )
+        except OAuthStateMismatchError:
+            self._log_oauth_failure("callback_validation")
+            return self._show_oauth_callback({"base": "oauth_state_mismatch"})
+        except OAuthCodeMissingError:
+            self._log_oauth_failure("callback_validation")
+            return self._show_oauth_callback({"base": "oauth_code_missing"})
+        except (OAuthCallbackError, KretaSecurityError):
+            self._log_oauth_failure("callback_validation")
+            return self._show_oauth_callback({"base": "oauth_callback_invalid"})
+        memory_store = MemoryTokenStore()
+        client = KretaApiClient(
+            session=async_get_clientsession(self.hass),
+            klik_id=self._pending_data[CONF_KLIK_ID],
+            token_store=memory_store,
+        )
+        try:
+            account_key = await client.async_exchange_authorization_code(
+                code, self._attempt.code_verifier
+            )
+            profile = await client.async_get_student_profile()
+        except CannotConnectError:
+            self._log_oauth_failure("token_exchange")
+            return self._show_oauth_callback({"base": "cannot_connect"})
+        except (InvalidAuthError, KretaApiError):
+            self._log_oauth_failure("token_exchange")
+            return self._show_oauth_callback({"base": "token_exchange_failed"})
+        refresh_token = await memory_store.async_get_refresh_token()
+        if refresh_token is None:
+            self._log_oauth_failure("token_exchange")
+            return self._show_oauth_callback({"base": "token_exchange_failed"})
+        return await self._async_finish_oauth(
+            account_key,
+            refresh_token,
+            profile.school_name or "KRÉTA fiók",
+        )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> config_entries.ConfigFlowResult:
+        """Start browser-based reauthentication."""
+        self._pending_mode = "reauth"
+        self._pending_data = dict(entry_data)
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Handle the re-authentication form (password only)."""
-        reauth_entry = self._get_reauth_entry()
-        errors: dict[str, str] = {}
-
+        """Confirm and launch browser-based reauthentication."""
+        entry = self._get_reauth_entry()
         if user_input is not None:
-            new_data = {**reauth_entry.data, CONF_PASSWORD: user_input[CONF_PASSWORD]}
             self._pending_mode = "reauth"
-            try:
-                info = await self._async_authenticate(new_data)
-            except KretaTwoFactorRequired:
-                return await self.async_step_two_factor()
-            except InvalidAuthError:
-                errors["base"] = "invalid_auth"
-            except CannotConnectError:
-                errors["base"] = "cannot_connect"
-            except KretaApiError:
-                errors["base"] = "unknown"
-            else:
-                return await self._async_finish_pending(info)
-
-        return self.async_show_form(
-            step_id="reauth_confirm",
-            data_schema=_build_reauth_schema(),
-            description_placeholders={
-                CONF_USER_ID: reauth_entry.data[CONF_USER_ID],
-                CONF_KLIK_ID: reauth_entry.data[CONF_KLIK_ID],
-            },
-            errors=errors,
-        )
+            return self._begin_oauth(dict(entry.data))
+        return self.async_show_form(step_id="reauth_confirm", data_schema=vol.Schema({}))
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Handle manual reconfiguration of credentials."""
-        reconfigure_entry = self._get_reconfigure_entry()
-        errors: dict[str, str] = {}
-
+        """Reconfigure the institution through a fresh official login."""
+        entry = self._get_reconfigure_entry()
         if user_input is not None:
-            new_data = {
-                **reconfigure_entry.data,
-                CONF_KLIK_ID: user_input[CONF_KLIK_ID].strip(),
-                CONF_USER_ID: user_input[CONF_USER_ID],
-                CONF_PASSWORD: user_input[CONF_PASSWORD],
-            }
             self._pending_mode = "reconfigure"
-            try:
-                info = await self._async_authenticate(new_data)
-            except KretaTwoFactorRequired:
-                return await self.async_step_two_factor()
-            except InvalidAuthError:
-                errors["base"] = "invalid_auth"
-            except CannotConnectError:
-                errors["base"] = "cannot_connect"
-            except KretaApiError:
-                errors["base"] = "unknown"
-            else:
-                return await self._async_finish_pending(info)
-
+            return self._begin_oauth(user_input)
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_build_reconfigure_schema(
-                user_input if user_input is not None else dict(reconfigure_entry.data)
-            ),
-            errors=errors,
+            data_schema=_build_user_schema(dict(entry.data)),
         )
 
     @staticmethod
@@ -341,19 +296,18 @@ class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class KretaOptionsFlowHandler(config_entries.OptionsFlow):
-    """Handle Kreta options."""
+    """Handle KRÉTA runtime options."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
+        """Initialize the options flow."""
         self._config_entry = config_entry
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Manage the options."""
+        """Manage runtime options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
-
         return self.async_show_form(
             step_id="init",
             data_schema=_build_options_schema(self._config_entry),

@@ -27,5 +27,13 @@ class KretaRateLimitError(KretaApiError):
     """Raised when KRÉTA rate-limits a request."""
 
 
-class KretaTwoFactorRequired(InvalidAuthError):
-    """Raised when login must continue with a one-time 2FA code."""
+class OAuthCallbackError(InvalidAuthError):
+    """Raised when the OAuth callback is invalid."""
+
+
+class OAuthStateMismatchError(OAuthCallbackError):
+    """Raised when OAuth state validation fails."""
+
+
+class OAuthCodeMissingError(OAuthCallbackError):
+    """Raised when an OAuth callback has no authorization code."""

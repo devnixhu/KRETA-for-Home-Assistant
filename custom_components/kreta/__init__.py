@@ -12,7 +12,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_time_change
 
 from .api.client import KretaApiClient
-from .api.storage import KretaTokenStore, credential_key
+from .api.storage import KretaTokenStore, entry_storage_key
 from .const import DOMAIN, PLATFORMS
 from .coordinator import KretaDataUpdateCoordinator
 
@@ -39,26 +39,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: KretaConfigEntry) -> boo
     """Set up Kreta from a config entry."""
     _LOGGER.info("Setting up KRÉTA Secure entry")
     session = async_get_clientsession(hass)
-    token_store = KretaTokenStore(
-        hass, credential_key(entry.data["klik_id"], entry.data["user_id"])
-    )
+    token_store = KretaTokenStore(hass, entry_storage_key(dict(entry.data)))
     client = KretaApiClient(
         session=session,
         klik_id=entry.data["klik_id"],
-        user_id=entry.data["user_id"],
-        password=entry.data.get("password"),
         token_store=token_store,
     )
     coordinator = KretaDataUpdateCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
-    client.discard_password()
-
-    # One-time migration for legacy entries: once a refresh token exists, the
-    # password is no longer retained in Home Assistant's config-entry store.
-    if "password" in entry.data:
-        hass.config_entries.async_update_entry(
-            entry, data={key: value for key, value in entry.data.items() if key != "password"}
-        )
 
     _LOGGER.info("KRÉTA Secure entry is ready")
 
@@ -87,6 +75,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: KretaConfigEntry) -> bo
     if unloaded:
         hass.data[DOMAIN].pop(entry.entry_id, None)
     return unloaded
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: KretaConfigEntry) -> bool:
+    """Remove legacy passwords while retaining usable refresh-token identity data."""
+    data = {key: value for key, value in entry.data.items() if key != "password"}
+    hass.config_entries.async_update_entry(entry, data=data, version=2)
+    return True
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: KretaConfigEntry) -> None:

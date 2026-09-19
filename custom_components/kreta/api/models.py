@@ -23,7 +23,6 @@ class StudentProfile:
 
     student_name: str | None
     school_name: str | None
-    # Compatibility-only fields: the secure client never populates these.
     birth_name: str | None = None
     birth_place: str | None = None
     mother_name: str | None = None

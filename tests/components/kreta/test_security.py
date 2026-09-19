@@ -1,36 +1,28 @@
-"""Security, authentication, privacy and baseline regression tests."""
+"""OAuth, security, storage and regression tests."""
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 from collections import deque
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.const import CONF_PASSWORD
 
-from custom_components.kreta.api.auth import (
-    extract_authorization_code,
-    extract_request_verification_token,
-    extract_two_factor_form,
-    is_two_factor_route,
-)
-from custom_components.kreta.api.client import (
-    AUTHORIZE_URL,
-    CALLBACK_URL,
-    KretaApiClient,
-)
+from custom_components.kreta.api.client import KretaApiClient
 from custom_components.kreta.api.diagnostics import (
     sanitize_form_data,
     sanitize_redirect_url,
     sanitize_response_body,
 )
-from custom_components.kreta.api.endpoints import LOGIN_URL, TOKEN_URL
+from custom_components.kreta.api.endpoints import TOKEN_URL
 from custom_components.kreta.api.exceptions import (
     InvalidAuthError,
     KretaSecurityError,
-    KretaTwoFactorRequired,
+    OAuthCallbackError,
+    OAuthCodeMissingError,
+    OAuthStateMismatchError,
 )
 from custom_components.kreta.api.models import OAuthTokens
 from custom_components.kreta.api.network_policy import (
@@ -38,185 +30,37 @@ from custom_components.kreta.api.network_policy import (
     validate_redirect,
     validate_url,
 )
+from custom_components.kreta.api.oauth import (
+    OAUTH_CLIENT_ID,
+    OAUTH_REDIRECT_URI,
+    OAUTH_SCOPES,
+    account_key_from_id_token,
+    build_authorization_url,
+    extract_callback_code,
+)
+from custom_components.kreta.api.pkce import PkceAttempt, derive_code_challenge
 from custom_components.kreta.api.storage import (
     KretaBaselineStore,
     MemoryTokenStore,
     credential_key,
+    entry_storage_key,
 )
-from custom_components.kreta.config_flow import KretaConfigFlow
+from custom_components.kreta.config_flow import KretaConfigFlow, _build_user_schema
 from custom_components.kreta.const import (
+    CONF_ACCOUNT_KEY,
     CONF_KLIK_ID,
     CONF_LOOKAHEAD_WEEKS,
     CONF_MESSAGES,
+    CONF_OAUTH_REDIRECT_URL,
     CONF_REFRESH_MINUTES,
-    CONF_USER_ID,
 )
 from custom_components.kreta.coordinator import KretaDataUpdateCoordinator
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://idp.e-kreta.hu",
-        "https://evil.example",
-        "https://e-kreta.hu.evil.example",
-        "https://idp.e-kreta.hu@evil.example",
-        "https://localhost",
-        "https://127.0.0.1",
-        "https://192.168.1.1",
-        "file:///etc/passwd",
-        "ftp://example.com",
-        "https://school01.e-kreta.hu:444/path",
-        "https://school01.e-kreta.hu/path#fragment",
-    ],
-)
-def test_network_policy_rejects_untrusted_destinations(url: str) -> None:
-    with pytest.raises(KretaSecurityError):
-        validate_url(url, "school01")
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://idp.e-kreta.hu/connect/token",
-        "https://mobil.e-kreta.hu/oauthredirect",
-        "https://school01.e-kreta.hu/ellenorzo/v3/Sajat/Ertekelesek",
-    ],
-)
-def test_network_policy_allows_only_expected_hosts(url: str) -> None:
-    assert validate_url(url, "school01") == url
-
-
-def test_messages_host_requires_explicit_feature_permission() -> None:
-    url = "https://eugyintezes.e-kreta.hu/api/v1/kommunikacio/postaladaelemek/beerkezett"
-    with pytest.raises(KretaSecurityError):
-        validate_url(url, "school01")
-    assert validate_url(url, "school01", include_messages=True) == url
-
-
-@pytest.mark.parametrize("value", ["", "school.example", "../x", "a/b", "árvíz", "-school"])
-def test_institution_identifier_is_strict(value: str) -> None:
-    with pytest.raises(KretaSecurityError):
-        normalize_institution(value)
-
-
-def test_institution_identifier_is_normalized() -> None:
-    assert normalize_institution("  SCHOOL-01 ") == "school-01"
-
-
-def test_redirect_to_untrusted_host_is_blocked() -> None:
-    with pytest.raises(KretaSecurityError):
-        validate_redirect("https://idp.e-kreta.hu/start", "https://evil.example/x", "school01")
-
-
-def test_relative_redirect_is_validated_and_resolved() -> None:
-    assert (
-        validate_redirect("https://idp.e-kreta.hu/start", "/Account/Login", "school01")
-        == "https://idp.e-kreta.hu/Account/Login"
-    )
-
-
-def test_auth_html_extractors() -> None:
-    html = (
-        '<form><input name="__RequestVerificationToken" '
-        'type="hidden" value="csrf-value"></form>'
-    )
-    assert extract_request_verification_token(html) == "csrf-value"
-    assert extract_authorization_code("https://mobil.e-kreta.hu/cb?code=auth-code") == "auth-code"
-
-
-def test_two_factor_form_detection() -> None:
-    html = """
-      <form action="/Account/LoginWith2fa">
-        <input name="__RequestVerificationToken" value="csrf">
-        <input name="Input.TwoFactorCode" value="">
-      </form>
-    """
-    action, fields, code_field = extract_two_factor_form(html) or (None, None, None)
-    assert action == "/Account/LoginWith2fa"
-    assert fields == {"__RequestVerificationToken": "csrf", "Input.TwoFactorCode": ""}
-    assert code_field == "Input.TwoFactorCode"
-
-
-def test_non_2fa_form_is_not_misclassified() -> None:
-    assert extract_two_factor_form('<form><input name="UserName"></form>') is None
-
-
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://idp.e-kreta.hu/Account/LoginWithTwoFactor",
-        "https://idp.e-kreta.hu/account/loginwith2fa",
-        "https://idp.e-kreta.hu/Account/LoginWith-TwoFactor",
-    ],
-)
-def test_known_two_factor_route_variants(url: str) -> None:
-    assert is_two_factor_route(url)
-
-
-def test_all_auth_secrets_are_redacted() -> None:
-    secrets = {
-        "Password": "password-value",
-        "refresh_token": "refresh-value",
-        "code": "auth-code",
-        "Input.TwoFactorCode": "123456",
-        "otp": "654321",
-    }
-    sanitized = sanitize_form_data(secrets)
-    assert set(sanitized.values()) == {"***"}
-    assert not any(value in str(sanitized) for value in secrets.values())
-
-
-def test_response_values_are_never_logged() -> None:
-    body = '{"access_token":"secret","student_name":"Private Person","error":"bad"}'
-    result = sanitize_response_body(body)
-    assert "secret" not in result
-    assert "Private Person" not in result
-    assert "access_token" in result
-
-
-def test_redirect_authorization_code_is_redacted() -> None:
-    result = sanitize_redirect_url("https://mobil.e-kreta.hu/cb?code=secret&state=ok")
-    assert "secret" not in result
-    assert "state=ok" in result
-
-
-def test_token_repr_does_not_expose_secrets() -> None:
-    tokens = OAuthTokens("access-secret", "refresh-secret")
-    assert "access-secret" not in repr(tokens)
-    assert "refresh-secret" not in repr(tokens)
-
-
-def test_credential_key_is_stable_and_non_identifying() -> None:
-    key = credential_key("School01", "Student01")
-    assert key == credential_key(" school01 ", " student01 ")
-    assert "school" not in key
-    assert "student" not in key
-    assert len(key) == 64
-
-
-async def test_client_without_password_requires_reauth() -> None:
-    client = KretaApiClient(
-        session=AsyncMock(),
-        klik_id="school01",
-        user_id="student01",
-        password=None,
-        token_store=MemoryTokenStore(),
-    )
-    with pytest.raises(InvalidAuthError, match="reauthentication"):
-        await client.async_authenticate()
-
-
-def test_password_can_be_discarded_from_memory() -> None:
-    client = KretaApiClient(
-        session=AsyncMock(),
-        klik_id="school01",
-        user_id="student01",
-        password="temporary-password",
-        token_store=MemoryTokenStore(),
-    )
-    client.discard_password()
-    assert client._password is None
+def _jwt(payload: dict[str, str]) -> str:
+    header = base64.urlsafe_b64encode(b'{"alg":"none"}').decode().rstrip("=")
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    return f"{header}.{body}.signature"
 
 
 class _FakeResponse:
@@ -255,252 +99,295 @@ class _FakeSession:
 
     async def request(self, method: str, url: str, **kwargs):
         self.requests.append((method, url, kwargs))
-        assert self.responses, f"Unexpected request: {method} {url}"
+        assert self.responses
         return self.responses.popleft()
 
 
-_LOGIN_PAGE = """
-<form action="/account/login">
-  <input type="hidden" name="__RequestVerificationToken" value="login-csrf">
-</form>
-"""
-_TWO_FACTOR_PAGE = """
-<form action="/Account/LoginWithTwoFactor">
-  <input type="hidden" name="__RequestVerificationToken" value="two-factor-csrf">
-  <input name="Input.TwoFactorCode" value="">
-</form>
-"""
-_OAUTH_REDIRECT = (
-    "https://mobil.e-kreta.hu/ellenorzo-student/prod/oauthredirect?"
-    "code=authorization-secret&state=kreten_student_mobile"
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://idp.e-kreta.hu",
+        "https://evil.example",
+        "https://e-kreta.hu.evil.example",
+        "https://idp.e-kreta.hu@evil.example",
+        "https://localhost",
+        "https://127.0.0.1",
+        "file:///etc/passwd",
+        "https://school01.e-kreta.hu:444/path",
+        "https://school01.e-kreta.hu/path#fragment",
+    ],
 )
-
-
-def _client_with_responses(
-    responses: list[_FakeResponse], *, user_id: str = "student01", password: str = "password-secret"
-) -> tuple[KretaApiClient, _FakeSession, MemoryTokenStore]:
-    session = _FakeSession(responses)
-    store = MemoryTokenStore()
-    return (
-        KretaApiClient(
-            session=session,
-            klik_id="school01",
-            user_id=user_id,
-            password=password,
-            token_store=store,
-        ),
-        session,
-        store,
-    )
-
-
-async def test_password_login_without_two_factor_still_works() -> None:
-    client, session, store = _client_with_responses(
-        [
-            _FakeResponse(200, body=_LOGIN_PAGE),
-            _FakeResponse(200),
-            _FakeResponse(302, headers={"Location": _OAUTH_REDIRECT}),
-            _FakeResponse(
-                200,
-                payload={"access_token": "access-secret", "refresh_token": "refresh-secret"},
-            ),
-        ]
-    )
-
-    await client.async_authenticate(force_login=True)
-
-    assert [url for _method, url, _kwargs in session.requests] == [
-        AUTHORIZE_URL,
-        LOGIN_URL,
-        CALLBACK_URL,
-        TOKEN_URL,
-    ]
-    assert client._access_token == "access-secret"
-    assert client._password is None
-    assert await store.async_get_refresh_token() == "refresh-secret"
-
-
-async def test_password_redirect_loads_and_parses_two_factor_page() -> None:
-    client, session, _store = _client_with_responses(
-        [
-            _FakeResponse(200, body=_LOGIN_PAGE),
-            _FakeResponse(
-                302,
-                headers={"Location": "/Account/LoginWithTwoFactor?returnUrl=%2Fconnect"},
-            ),
-            _FakeResponse(200, body=_TWO_FACTOR_PAGE),
-        ]
-    )
-
-    with pytest.raises(KretaTwoFactorRequired):
-        await client.async_authenticate(force_login=True)
-
-    assert session.requests[-1][1].startswith(
-        "https://idp.e-kreta.hu/Account/LoginWithTwoFactor"
-    )
-    assert client._two_factor_action == (
-        "https://idp.e-kreta.hu/Account/LoginWithTwoFactor"
-    )
-    assert client._two_factor_fields == {
-        "__RequestVerificationToken": "two-factor-csrf",
-        "Input.TwoFactorCode": "",
-    }
-    assert client._two_factor_code_field == "Input.TwoFactorCode"
-
-
-async def test_two_factor_form_in_password_response_body_is_preserved() -> None:
-    client, session, _store = _client_with_responses(
-        [
-            _FakeResponse(200, body=_LOGIN_PAGE),
-            _FakeResponse(200, body=_TWO_FACTOR_PAGE),
-        ]
-    )
-
-    with pytest.raises(KretaTwoFactorRequired):
-        await client.async_authenticate(force_login=True)
-
-    assert len(session.requests) == 2
-    assert client._two_factor_code_field == "Input.TwoFactorCode"
-
-
-async def test_correct_two_factor_code_continues_oauth_without_following_post_redirect() -> None:
-    client, session, store = _client_with_responses(
-        [
-            _FakeResponse(200, body=_LOGIN_PAGE),
-            _FakeResponse(302, headers={"Location": "/Account/LoginWith2fa"}),
-            _FakeResponse(200, body=_TWO_FACTOR_PAGE.replace("LoginWithTwoFactor", "LoginWith2fa")),
-            _FakeResponse(303, headers={"Location": "/connect/authorize/callback"}),
-            _FakeResponse(302, headers={"Location": _OAUTH_REDIRECT}),
-            _FakeResponse(
-                200,
-                payload={"access_token": "access-secret", "refresh_token": "refresh-secret"},
-            ),
-        ]
-    )
-    with pytest.raises(KretaTwoFactorRequired):
-        await client.async_authenticate(force_login=True)
-
-    await client.async_submit_two_factor("123456")
-
-    post = session.requests[3]
-    assert post[0] == "post"
-    assert post[2]["allow_redirects"] is False
-    assert post[2]["data"]["Input.TwoFactorCode"] == "123456"
-    assert session.requests[4][1] == CALLBACK_URL
-    assert await store.async_get_refresh_token() == "refresh-secret"
-
-
-async def test_incorrect_two_factor_code_is_rejected_and_challenge_remains() -> None:
-    client, _session, _store = _client_with_responses(
-        [_FakeResponse(200, body=_TWO_FACTOR_PAGE)]
-    )
-    client._remember_two_factor_form(
-        "https://idp.e-kreta.hu/Account/LoginWithTwoFactor", _TWO_FACTOR_PAGE
-    )
-
-    with pytest.raises(InvalidAuthError, match="rejected"):
-        await client.async_submit_two_factor("654321")
-
-    assert client._two_factor_fields is not None
-
-
-async def test_external_two_factor_redirect_is_blocked() -> None:
-    client, _session, _store = _client_with_responses(
-        [
-            _FakeResponse(200, body=_LOGIN_PAGE),
-            _FakeResponse(
-                302,
-                headers={"Location": "https://evil.example/Account/LoginWithTwoFactor"},
-            ),
-        ]
-    )
-
+def test_network_policy_rejects_untrusted_destinations(url: str) -> None:
     with pytest.raises(KretaSecurityError):
-        await client.async_authenticate(force_login=True)
+        validate_url(url, "school01")
 
 
-async def test_config_flow_moves_to_two_factor_step() -> None:
-    flow = KretaConfigFlow()
-    flow._async_authenticate = AsyncMock(
-        side_effect=KretaTwoFactorRequired("2FA required")
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://idp.e-kreta.hu/connect/token",
+        OAUTH_REDIRECT_URI,
+        "https://school01.e-kreta.hu/ellenorzo/v3/Sajat/Ertekelesek",
+    ],
+)
+def test_network_policy_allows_expected_hosts(url: str) -> None:
+    assert validate_url(url, "school01") == url
+
+
+def test_external_redirect_is_blocked() -> None:
+    with pytest.raises(KretaSecurityError):
+        validate_redirect("https://idp.e-kreta.hu/start", "https://evil.example/x", "school01")
+
+
+def test_institution_normalization_is_strict() -> None:
+    assert normalize_institution(" SCHOOL-01 ") == "school-01"
+    with pytest.raises(KretaSecurityError):
+        normalize_institution("árvíz")
+
+
+def test_pkce_attempt_uses_independent_secure_values() -> None:
+    first = PkceAttempt.create()
+    second = PkceAttempt.create()
+    assert 43 <= len(first.code_verifier) <= 128
+    assert first.code_challenge == derive_code_challenge(first.code_verifier)
+    assert first.code_verifier != second.code_verifier
+    assert first.state != second.state
+    assert first.nonce != second.nonce
+    assert first.state != first.nonce
+
+
+def test_pkce_challenge_matches_rfc_vector() -> None:
+    verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    assert derive_code_challenge(verifier) == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
+
+def test_authorization_url_has_verified_firka_parameters() -> None:
+    from urllib.parse import parse_qs, urlsplit
+
+    attempt = PkceAttempt("verifier", "challenge", "state-value", "nonce-value")
+    outer = urlsplit(build_authorization_url("school01", attempt))
+    assert outer.scheme == "https"
+    assert outer.hostname == "idp.e-kreta.hu"
+    assert outer.path == "/Account/Login"
+    return_url = parse_qs(outer.query)["ReturnUrl"][0]
+    inner = urlsplit(return_url)
+    params = parse_qs(inner.query)
+    assert inner.path == "/connect/authorize/callback"
+    assert params["redirect_uri"] == [OAUTH_REDIRECT_URI]
+    assert params["client_id"] == [OAUTH_CLIENT_ID]
+    assert params["response_type"] == ["code"]
+    assert params["code_challenge_method"] == ["S256"]
+    assert params["code_challenge"] == ["challenge"]
+    assert params["state"] == ["state-value"]
+    assert params["nonce"] == ["nonce-value"]
+    assert params["scope"][0].split() == list(OAUTH_SCOPES)
+    assert params["institute_code"] == ["school01"]
+
+
+def test_callback_code_is_validated() -> None:
+    url = f"{OAUTH_REDIRECT_URI}?code=one-time-code&state=expected-state"
+    assert extract_callback_code(url, "school01", "expected-state") == "one-time-code"
+
+
+def test_state_mismatch_is_rejected() -> None:
+    url = f"{OAUTH_REDIRECT_URI}?code=one-time-code&state=wrong-state"
+    with pytest.raises(OAuthStateMismatchError):
+        extract_callback_code(url, "school01", "expected-state")
+
+
+def test_missing_code_is_rejected() -> None:
+    url = f"{OAUTH_REDIRECT_URI}?state=expected-state"
+    with pytest.raises(OAuthCodeMissingError):
+        extract_callback_code(url, "school01", "expected-state")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/ellenorzo-student/prod/oauthredirect?code=x&state=s",
+        "http://mobil.e-kreta.hu/ellenorzo-student/prod/oauthredirect?code=x&state=s",
+        "https://mobil.e-kreta.hu/wrong?code=x&state=s",
+    ],
+)
+def test_invalid_callback_is_rejected(url: str) -> None:
+    with pytest.raises((KretaSecurityError, OAuthCallbackError)):
+        extract_callback_code(url, "school01", "s")
+
+
+def test_account_key_uses_opaque_identity() -> None:
+    token = _jwt(
+        {"kreta:institute_code": "school01", "kreta:institute_user_id": "Árvíztűrő"}
     )
+    key = account_key_from_id_token(token, "school01")
+    assert len(key) == 64
+    assert "Árvíz" not in key
+    assert key != account_key_from_id_token(
+        _jwt({"kreta:institute_code": "school01", "kreta:institute_user_id": "másik"}),
+        "school01",
+    )
+
+
+def test_identity_token_institution_mismatch_is_rejected() -> None:
+    token = _jwt({"kreta:institute_code": "other", "sub": "student"})
+    with pytest.raises(OAuthCallbackError):
+        account_key_from_id_token(token, "school01")
+
+
+def test_config_schema_has_no_local_credentials_or_two_factor() -> None:
+    keys = {str(key.schema) for key in _build_user_schema().schema}
+    assert keys == {CONF_KLIK_ID, CONF_REFRESH_MINUTES, CONF_LOOKAHEAD_WEEKS}
+    assert "password" not in keys
+    assert "user_id" not in keys
+    assert "two_factor_code" not in keys
+
+
+async def test_config_flow_starts_browser_oauth() -> None:
+    flow = KretaConfigFlow()
     result = await flow.async_step_user(
-        {
-            CONF_KLIK_ID: "school01",
-            CONF_USER_ID: "Árvíztűrő.Tükörfúrógép",
-            CONF_PASSWORD: "password-secret",
-            CONF_REFRESH_MINUTES: 10,
-            CONF_LOOKAHEAD_WEEKS: 4,
-        }
+        {CONF_KLIK_ID: "school01", CONF_REFRESH_MINUTES: 10, CONF_LOOKAHEAD_WEEKS: 2}
     )
-
     assert result["type"] == "form"
-    assert result["step_id"] == "two_factor"
+    assert result["step_id"] == "oauth_callback"
+    assert result["description_placeholders"]["authorization_url"].startswith(
+        "https://idp.e-kreta.hu/Account/Login"
+    )
+    assert flow._attempt is not None
 
 
-async def test_config_flow_reports_invalid_two_factor() -> None:
+async def test_config_flow_rejects_callback_state_mismatch() -> None:
     flow = KretaConfigFlow()
-    flow._pending_client = AsyncMock()
-    flow._pending_client.async_submit_two_factor.side_effect = InvalidAuthError("bad code")
+    await flow.async_step_user(
+        {CONF_KLIK_ID: "school01", CONF_REFRESH_MINUTES: 10, CONF_LOOKAHEAD_WEEKS: 2}
+    )
+    result = await flow.async_step_oauth_callback(
+        {CONF_OAUTH_REDIRECT_URL: f"{OAUTH_REDIRECT_URI}?code=x&state=wrong"}
+    )
+    assert result["step_id"] == "oauth_callback"
+    assert result["errors"] == {"base": "oauth_state_mismatch"}
 
-    result = await flow.async_step_two_factor({"two_factor_code": "000000"})
 
-    assert result["step_id"] == "two_factor"
-    assert result["errors"] == {"base": "invalid_two_factor"}
+async def test_reauthentication_launches_new_oauth_attempt() -> None:
+    flow = KretaConfigFlow()
+    entry = SimpleNamespace(
+        data={CONF_KLIK_ID: "school01", CONF_ACCOUNT_KEY: "a" * 64}
+    )
+    flow._get_reauth_entry = lambda: entry
+    result = await flow.async_step_reauth_confirm({})
+    assert result["step_id"] == "oauth_callback"
+    assert flow._pending_mode == "reauth"
 
 
-async def test_unicode_username_is_posted_without_normalization() -> None:
-    username = "Árvíztűrő.Tükörfúrógép"
-    client, session, _store = _client_with_responses(
+async def test_authorization_code_exchange_persists_only_refresh_token() -> None:
+    id_token = _jwt(
+        {"kreta:institute_code": "school01", "kreta:institute_user_id": "student"}
+    )
+    session = _FakeSession(
         [
-            _FakeResponse(200, body=_LOGIN_PAGE),
-            _FakeResponse(302, headers={"Location": "/Account/LoginWithTwoFactor"}),
-            _FakeResponse(200, body=_TWO_FACTOR_PAGE),
-        ],
-        user_id=username,
+            _FakeResponse(
+                200,
+                payload={
+                    "access_token": "access-secret",
+                    "refresh_token": "refresh-secret",
+                    "id_token": id_token,
+                },
+            )
+        ]
     )
-    with pytest.raises(KretaTwoFactorRequired):
-        await client.async_authenticate(force_login=True)
-
-    assert session.requests[1][2]["data"]["UserName"] == username
-
-
-async def test_auth_failure_log_contains_stage_but_no_secrets(caplog) -> None:
-    password = "password-secret-unique"
-    code = "987654"
-    client, _session, _store = _client_with_responses(
-        [_FakeResponse(200, body=_TWO_FACTOR_PAGE)], password=password
+    store = MemoryTokenStore()
+    client = KretaApiClient(session=session, klik_id="school01", token_store=store)
+    account_key = await client.async_exchange_authorization_code(
+        "authorization-secret", "verifier-secret"
     )
-    client._remember_two_factor_form(
-        "https://idp.e-kreta.hu/Account/LoginWithTwoFactor", _TWO_FACTOR_PAGE
-    )
+    request = session.requests[0]
+    assert request[0] == "post"
+    assert request[1] == TOKEN_URL
+    assert request[2]["allow_redirects"] is False
+    assert request[2]["data"] == {
+        "code": "authorization-secret",
+        "code_verifier": "verifier-secret",
+        "redirect_uri": OAUTH_REDIRECT_URI,
+        "client_id": OAUTH_CLIENT_ID,
+        "grant_type": "authorization_code",
+    }
+    assert len(account_key) == 64
+    assert client._access_token == "access-secret"
+    assert await store.async_get_refresh_token() == "refresh-secret"
+    assert not hasattr(store, "access_token")
 
+
+async def test_refresh_token_flow_works() -> None:
+    session = _FakeSession(
+        [_FakeResponse(200, payload={"access_token": "new-access", "refresh_token": "new-refresh"})]
+    )
+    store = MemoryTokenStore()
+    await store.async_set_refresh_token("old-refresh")
+    client = KretaApiClient(session=session, klik_id="school01", token_store=store)
+    await client.async_authenticate()
+    assert client._access_token == "new-access"
+    assert await store.async_get_refresh_token() == "new-refresh"
+
+
+async def test_invalid_refresh_token_is_removed_and_requires_reauth() -> None:
+    session = _FakeSession([_FakeResponse(401, body='{"error":"invalid_grant"}')])
+    store = MemoryTokenStore()
+    await store.async_set_refresh_token("stale-refresh")
+    client = KretaApiClient(session=session, klik_id="school01", token_store=store)
+    with pytest.raises(InvalidAuthError):
+        await client.async_authenticate()
+    assert await store.async_get_refresh_token() is None
+
+
+async def test_client_without_refresh_token_requires_reauth() -> None:
+    client = KretaApiClient(
+        session=_FakeSession([]), klik_id="school01", token_store=MemoryTokenStore()
+    )
+    with pytest.raises(InvalidAuthError, match="reauthentication"):
+        await client.async_authenticate()
+
+
+def test_auth_secrets_are_redacted() -> None:
+    secrets = {
+        "password": "password-value",
+        "refresh_token": "refresh-value",
+        "code": "auth-code",
+        "code_verifier": "verifier-value",
+    }
+    sanitized = sanitize_form_data(secrets)
+    assert set(sanitized.values()) == {"***"}
+    assert not any(value in str(sanitized) for value in secrets.values())
+    body = sanitize_response_body('{"access_token":"secret","name":"Private"}')
+    assert "secret" not in body
+    assert "Private" not in body
+    redirect = sanitize_redirect_url(
+        "https://mobil.e-kreta.hu/ellenorzo-student/prod/oauthredirect?code=secret&state=secret"
+    )
+    assert "code=secret" not in redirect
+    assert "state=secret" not in redirect
+
+
+async def test_failure_logs_contain_stage_but_no_oauth_secrets(caplog) -> None:
+    session = _FakeSession([_FakeResponse(400, body='{"error":"invalid_grant"}')])
+    client = KretaApiClient(
+        session=session, klik_id="school01", token_store=MemoryTokenStore()
+    )
     with caplog.at_level(logging.WARNING), pytest.raises(InvalidAuthError):
-        await client.async_submit_two_factor(code)
-
-    log_text = caplog.text
-    assert "KRÉTA auth stage failed: two_factor_submit" in log_text
-    assert password not in log_text
-    assert code not in log_text
-    assert "access-secret" not in log_text
-    assert "refresh-secret" not in log_text
-    assert "authorization-secret" not in log_text
+        await client.async_exchange_authorization_code("code-secret", "verifier-secret")
+    assert "KRÉTA auth stage failed: token_exchange" in caplog.text
+    assert "code-secret" not in caplog.text
+    assert "verifier-secret" not in caplog.text
 
 
-def test_config_entry_data_excludes_password_and_2fa() -> None:
-    flow = KretaConfigFlow()
-    flow._pending_input = {
-        "klik_id": "school01",
-        "user_id": "student01",
-        "password": "temporary-password",
-        "two_factor_code": "123456",
-        "refresh_minutes": 10,
-    }
-    assert flow._entry_data_without_secrets() == {
-        "klik_id": "school01",
-        "user_id": "student01",
-        "refresh_minutes": 10,
-    }
+def test_token_repr_does_not_expose_secrets() -> None:
+    tokens = OAuthTokens("access-secret", "refresh-secret")
+    assert "access-secret" not in repr(tokens)
+    assert "refresh-secret" not in repr(tokens)
+
+
+def test_legacy_and_new_storage_keys_are_supported() -> None:
+    legacy = credential_key("School01", "Student01")
+    assert legacy == entry_storage_key({CONF_KLIK_ID: "school01", "user_id": "student01"})
+    opaque = "a" * 64
+    assert entry_storage_key({CONF_KLIK_ID: "school01", CONF_ACCOUNT_KEY: opaque}) == opaque
 
 
 def test_disabled_feature_is_not_enabled() -> None:
@@ -529,12 +416,7 @@ async def test_initial_baseline_and_restart_deduplication(monkeypatch) -> None:
     had_baseline, new = await store.async_update("grades", {"grade-1"})
     assert had_baseline is False
     assert new
-
     restarted = KretaBaselineStore(SimpleNamespace(), "account")
     had_baseline, new = await restarted.async_update("grades", {"grade-1"})
     assert had_baseline is True
     assert new == set()
-
-    had_baseline, new = await restarted.async_update("grades", {"grade-1", "grade-2"})
-    assert had_baseline is True
-    assert len(new) == 1

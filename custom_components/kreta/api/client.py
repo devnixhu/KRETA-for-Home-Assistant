@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
@@ -15,14 +14,8 @@ from aiohttp import ClientError, ClientResponse, ClientSession
 from homeassistant.util import dt as dt_util
 
 from ..const import DEFAULT_TIMEOUT_SECONDS
-from .auth import (
-    extract_authorization_code,
-    extract_request_verification_token,
-    extract_two_factor_form,
-    is_two_factor_route,
-)
 from .diagnostics import AuthDiagnosticsTrace
-from .endpoints import LOGIN_URL, MESSAGES_URL, TOKEN_URL, api_url
+from .endpoints import MESSAGES_URL, TOKEN_URL, api_url
 from .exceptions import (
     ApiResponseError,
     CannotConnectError,
@@ -30,7 +23,6 @@ from .exceptions import (
     KretaApiError,
     KretaRateLimitError,
     KretaSecurityError,
-    KretaTwoFactorRequired,
 )
 from .models import (
     Absence,
@@ -43,6 +35,7 @@ from .models import (
     StudentProfile,
 )
 from .network_policy import normalize_institution, validate_redirect, validate_url
+from .oauth import OAUTH_CLIENT_ID, OAUTH_REDIRECT_URI, account_key_from_id_token
 from .storage import TokenStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,44 +59,6 @@ def _summarize_error_body(body: str) -> str:
     return body[:_ERROR_BODY_MAX_LENGTH] + "…"
 
 
-AUTHORIZE_PATH = (
-    "/Account/Login?ReturnUrl=%2Fconnect%2Fauthorize%2Fcallback%3Fprompt%3Dlogin"
-    "%26nonce%3DwylCrqT4oN6PPgQn2yQB0euKei9nJeZ6_ffJ-VpSKZU%26response_type%3Dcode"
-    "%26code_challenge_method%3DS256%26scope%3Dopenid%2520email%2520offline_access"
-    "%2520kreta-ellenorzo-webapi.public%2520kreta-eugyintezes-webapi.public"
-    "%2520kreta-fileservice-webapi.public%2520kreta-mobile-global-webapi.public"
-    "%2520kreta-dkt-webapi.public%2520kreta-ier-webapi.public%26code_challenge"
-    "%3DHByZRRnPGb-Ko_wTI7ibIba1HQ6lor0ws4bcgReuYSQ%26redirect_uri%3Dhttps%253A"
-    "%252F%252Fmobil.e-kreta.hu%252Fellenorzo-student%252Fprod%252Foauthredirect"
-    "%26client_id%3Dkreta-ellenorzo-student-mobile-ios%26state%3Dkreten_student_mobile"
-    "%26suppressed_prompt%3Dlogin"
-)
-CALLBACK_QUERY = (
-    "prompt=login&nonce=wylCrqT4oN6PPgQn2yQB0euKei9nJeZ6_ffJ-VpSKZU&response_type=code"
-    "&code_challenge_method=S256&scope=openid%20email%20offline_access"
-    "%20kreta-ellenorzo-webapi.public%20kreta-eugyintezes-webapi.public"
-    "%20kreta-fileservice-webapi.public%20kreta-mobile-global-webapi.public"
-    "%20kreta-dkt-webapi.public%20kreta-ier-webapi.public&code_challenge"
-    "=HByZRRnPGb-Ko_wTI7ibIba1HQ6lor0ws4bcgReuYSQ&redirect_uri=https%3A%2F%2Fmobil.e-kreta.hu"
-    "%2Fellenorzo-student%2Fprod%2Foauthredirect&client_id=kreta-ellenorzo-student-mobile-ios"
-    "&state=kreten_student_mobile&suppressed_prompt=login"
-)
-LOGIN_RETURN_URL = (
-    "/connect/authorize/callback?prompt=login&nonce=wylCrqT4oN6PPgQn2yQB0euKei9nJeZ6_ffJ-VpSKZU"
-    "&response_type=code&code_challenge_method=S256&scope=openid%20email%20offline_access"
-    "%20kreta-ellenorzo-webapi.public%20kreta-eugyintezes-webapi.public"
-    "%20kreta-fileservice-webapi.public%20kreta-mobile-global-webapi.public"
-    "%20kreta-dkt-webapi.public%20kreta-ier-webapi.public&code_challenge"
-    "=HByZRRnPGb-Ko_wTI7ibIba1HQ6lor0ws4bcgReuYSQ&redirect_uri=https%3A%2F%2Fmobil.e-kreta.hu"
-    "%2Fellenorzo-student%2Fprod%2Foauthredirect&client_id=kreta-ellenorzo-student-mobile-ios"
-    "&state=kreten_student_mobile&suppressed_prompt=login"
-)
-AUTHORIZE_URL = f"https://idp.e-kreta.hu{AUTHORIZE_PATH}"
-CALLBACK_URL = f"https://idp.e-kreta.hu/connect/authorize/callback?{CALLBACK_QUERY}"
-CLIENT_ID = "kreta-ellenorzo-student-mobile-ios"
-CODE_VERIFIER = "DSpuqj_HhDX4wzQIbtn8lr8NLE5wEi1iVLMtMK0jY6c"
-
-
 class KretaApiClient:
     """Kreta API client with refresh-token persistence."""
 
@@ -112,162 +67,34 @@ class KretaApiClient:
         *,
         session: ClientSession,
         klik_id: str,
-        user_id: str,
-        password: str | None,
         token_store: TokenStore,
     ) -> None:
         """Initialize the API client."""
         self._session = session
         self._klik_id = normalize_institution(klik_id)
-        self._user_id = user_id
-        # The password exists only while an interactive login is in progress.
-        # It is discarded immediately after successful authentication.
-        self._password = password
         self._token_store = token_store
         self._access_token: str | None = None
         self._auth_lock = asyncio.Lock()
-        self._two_factor_action: str | None = None
-        self._two_factor_fields: dict[str, str] | None = None
-        self._two_factor_code_field: str | None = None
 
     @property
     def _api_base_url(self) -> str:
         """Return the Kreta API base URL for this institute."""
         return api_url(self._klik_id, "Sajat").removesuffix("/Sajat")
 
-    async def async_authenticate(self, force_login: bool = False) -> None:
-        """Authenticate using refresh token first, then interactive login if needed."""
+    async def async_authenticate(self) -> None:
+        """Authenticate using only a stored refresh token."""
         async with self._auth_lock:
-            if self._access_token and not force_login:
+            if self._access_token:
                 return
-
             refresh_token = await self._token_store.async_get_refresh_token()
-            if refresh_token and not force_login:
-                _LOGGER.info("Authenticating with Kreta using stored refresh token")
-                try:
-                    await self._async_exchange_refresh_token(refresh_token)
-                    _LOGGER.info("Kreta authentication successful (refresh token)")
-                    return
-                except InvalidAuthError:
-                    _LOGGER.warning("Stored refresh token was rejected")
-            elif not force_login:
-                _LOGGER.info("No stored refresh token; full login is required")
-
-            if not self._password:
+            if not refresh_token:
                 raise InvalidAuthError("KRÉTA reauthentication is required")
-            _LOGGER.info("Performing full KRÉTA login")
-            await self._async_login()
-            self.discard_password()
-            _LOGGER.info("KRÉTA authentication successful")
-
-    def discard_password(self) -> None:
-        """Remove the password from memory after an initial login."""
-        self._password = None
-
-    async def async_submit_two_factor(self, code: str) -> None:
-        """Continue an in-memory login challenge with a one-time 2FA code."""
-        if not re.fullmatch(r"[A-Za-z0-9-]{4,32}", code.strip()):
-            raise InvalidAuthError("Invalid two-factor code format")
-        if not all((self._two_factor_action, self._two_factor_fields, self._two_factor_code_field)):
-            raise InvalidAuthError("No active two-factor challenge")
-        form = dict(self._two_factor_fields or {})
-        form[self._two_factor_code_field or "TwoFactorCode"] = code.strip()
-        form["RememberMachine"] = "false"
-        try:
-            response = await self._safe_session_request(
-                "post",
-                self._two_factor_action or "",
-                data=form,
-                follow_redirects=False,
-            )
-        except KretaSecurityError:
-            self._log_auth_stage_failure("two_factor_submit")
-            raise
-        except ClientError as err:
-            self._log_auth_stage_failure("two_factor_submit")
-            raise CannotConnectError("Could not submit the KRÉTA 2FA challenge") from err
-
-        body = await response.text()
-        if response.status == 200 and extract_two_factor_form(body) is not None:
-            self._log_auth_stage_failure("two_factor_submit")
-            raise InvalidAuthError("The two-factor code was rejected")
-        if response.status >= 400:
-            self._log_auth_stage_failure("two_factor_submit")
-            raise InvalidAuthError(
-                f"Two-factor form submission failed with {response.status}"
-            )
-        if response.status not in {302, 303}:
-            self._log_auth_stage_failure("two_factor_submit")
-            raise InvalidAuthError(
-                f"Unexpected two-factor response status {response.status}"
-            )
-        if response.headers.get("Location") is None:
-            self._log_auth_stage_failure("two_factor_submit")
-            raise InvalidAuthError("Two-factor response omitted its redirect URL")
-
-        self._two_factor_action = None
-        self._two_factor_fields = None
-        self._two_factor_code_field = None
-        await self._async_finish_login()
-        self.discard_password()
+            await self._async_exchange_refresh_token(refresh_token)
 
     @staticmethod
     def _log_auth_stage_failure(stage: str) -> None:
         """Log a privacy-safe authentication stage marker."""
         _LOGGER.warning("KRÉTA auth stage failed: %s", stage)
-
-    def _remember_two_factor_form(self, page_url: str, html: str) -> None:
-        """Validate and retain a parsed 2FA form only for this login attempt."""
-        two_factor = extract_two_factor_form(html)
-        if two_factor is None:
-            self._log_auth_stage_failure("two_factor_page")
-            raise InvalidAuthError("KRÉTA two-factor page did not contain a 2FA form")
-        action, fields, code_field = two_factor
-        if not fields.get("__RequestVerificationToken"):
-            self._log_auth_stage_failure("two_factor_page")
-            raise InvalidAuthError("KRÉTA two-factor form omitted its CSRF token")
-        self._two_factor_action = validate_redirect(
-            page_url, action or page_url, self._klik_id
-        )
-        self._two_factor_fields = fields
-        self._two_factor_code_field = code_field
-
-    async def _async_load_two_factor_page(
-        self, page_url: str, trace: AuthDiagnosticsTrace
-    ) -> None:
-        """GET and parse a validated KRÉTA two-factor page."""
-        try:
-            response = await self._safe_session_request(
-                "get", page_url, follow_redirects=False
-            )
-        except (ClientError, KretaSecurityError):
-            self._log_auth_stage_failure("two_factor_page")
-            raise
-        body = await response.text()
-        trace.record_exchange(
-            label="GET two-factor page",
-            method="GET",
-            url=page_url,
-            response_status=response.status,
-            response_body=body if response.status >= 400 else None,
-        )
-        if response.status != 200:
-            self._log_auth_stage_failure("two_factor_page")
-            raise InvalidAuthError(
-                f"KRÉTA two-factor page returned {response.status}"
-            )
-        self._remember_two_factor_form(page_url, body)
-        raise KretaTwoFactorRequired("A KRÉTA 2FA code is required")
-
-    async def async_reauthenticate(self) -> None:
-        """Reauthenticate explicitly after an auth failure.
-
-        Clears the stale access token and re-runs the normal auth flow so the
-        stored refresh token is tried before falling back to a full login.
-        """
-        async with self._auth_lock:
-            self._access_token = None
-        await self.async_authenticate()
 
     async def async_get_student_profile(self) -> StudentProfile:
         """Fetch and immediately minimize the pupil profile."""
@@ -275,8 +102,6 @@ class KretaApiClient:
         if not isinstance(payload, dict):
             raise ApiResponseError("Student profile response has an invalid shape")
         profile = StudentProfile(
-            # The response contains extensive personal data; retain only the
-            # institution display name needed for setup UX.
             student_name=None,
             school_name=(payload.get("Intezmeny") or {}).get("TeljesNev")
             or payload.get("IntezmenyNev"),
@@ -594,7 +419,8 @@ class KretaApiClient:
         if response.status in {401, 403}:
             response.release()
             if retry_on_auth_error:
-                await self.async_reauthenticate()
+                self._access_token = None
+                await self.async_authenticate()
                 return await self._async_request(
                     method,
                     url,
@@ -628,7 +454,7 @@ class KretaApiClient:
         request_data = {
             "refresh_token": refresh_token,
             "institute_code": self._klik_id,
-            "client_id": CLIENT_ID,
+            "client_id": OAUTH_CLIENT_ID,
             "grant_type": "refresh_token",
         }
         try:
@@ -660,8 +486,6 @@ class KretaApiClient:
             )
             trace.log_failure(_LOGGER, "authentication")
             self._log_auth_stage_failure("token_exchange")
-            # The server has explicitly rejected this refresh token — remove it from
-            # persistent storage so it is not retried on the next auth cycle.
             await self._token_store.async_set_refresh_token(None)
             raise InvalidAuthError("Stored refresh token is no longer valid")
         if response.status >= 400:
@@ -702,164 +526,21 @@ class KretaApiClient:
         if new_refresh is not None:
             await self._token_store.async_set_refresh_token(new_refresh)
 
-    async def _async_login(self) -> None:
-        """Perform the interactive login flow to obtain a new refresh token."""
+    async def async_exchange_authorization_code(
+        self, code: str, code_verifier: str
+    ) -> str:
+        """Exchange a transient authorization code and return an account key."""
         trace = AuthDiagnosticsTrace()
-        stage = "password_login"
-        login_request_data: dict[str, Any] = {
-            "ReturnUrl": LOGIN_RETURN_URL,
-            "IsTemporaryLogin": False,
-            "UserName": self._user_id,
-            "Password": self._password,
-            "InstituteCode": self._klik_id,
-            "loginType": "InstituteLogin",
+        request_data: dict[str, Any] = {
+            "code": code,
+            "code_verifier": code_verifier,
+            "redirect_uri": OAUTH_REDIRECT_URI,
+            "client_id": OAUTH_CLIENT_ID,
+            "grant_type": "authorization_code",
         }
         try:
-            # Step 1: GET the authorize/login page to obtain the CSRF token.
-            login_page = await self._safe_session_request("get", AUTHORIZE_URL)
-            html = await login_page.text()
-            trace.record_exchange(
-                label="GET authorize page",
-                method="GET",
-                url=AUTHORIZE_URL,
-                response_status=login_page.status,
-                response_body=html if login_page.status >= 400 else None,
-            )
-            if login_page.status >= 400:
-                trace.log_failure(_LOGGER, "authentication")
-                self._log_auth_stage_failure(stage)
-                raise InvalidAuthError(f"Login authorize page returned {login_page.status}")
-            try:
-                verification_token = extract_request_verification_token(html)
-            except InvalidAuthError:
-                self._log_auth_stage_failure(stage)
-                raise
-
-            # Step 2: POST the login form with credentials.
-            full_login_data = {
-                **login_request_data,
-                "__RequestVerificationToken": verification_token,
-            }
-            response = await self._safe_session_request(
-                "post",
-                LOGIN_URL,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/131.0.0.0 Safari/537.36"
-                    ),
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-                data=full_login_data,
-                follow_redirects=False,
-            )
-            if response.status >= 400:
-                login_body = await response.text()
-                trace.record_exchange(
-                    label="POST login form",
-                    method="POST",
-                    url=LOGIN_URL,
-                    request_data=full_login_data,
-                    response_status=response.status,
-                    response_body=login_body,
-                )
-                trace.log_failure(_LOGGER, "authentication")
-                self._log_auth_stage_failure(stage)
-                raise InvalidAuthError(f"Login form submission failed with {response.status}")
-            trace.record_exchange(
-                label="POST login form",
-                method="POST",
-                url=LOGIN_URL,
-                request_data=full_login_data,
-                response_status=response.status,
-            )
-
-            login_body = await response.text()
-            two_factor = extract_two_factor_form(login_body)
-            if two_factor is not None:
-                self._remember_two_factor_form(LOGIN_URL, login_body)
-                raise KretaTwoFactorRequired("A KRÉTA 2FA code is required")
-
-            if response.status in {302, 303}:
-                location = response.headers.get("Location")
-                if location is None:
-                    self._log_auth_stage_failure(stage)
-                    raise InvalidAuthError("Login response omitted its redirect URL")
-                redirected = validate_redirect(LOGIN_URL, location, self._klik_id)
-                if is_two_factor_route(redirected):
-                    stage = "two_factor_page"
-                    await self._async_load_two_factor_page(redirected, trace)
-            elif response.status != 200:
-                self._log_auth_stage_failure(stage)
-                raise InvalidAuthError(
-                    f"Unexpected login response status {response.status}"
-                )
-
-            await self._async_finish_login(trace)
-        except KretaTwoFactorRequired:
-            raise
-        except KretaSecurityError:
-            self._log_auth_stage_failure(stage)
-            raise
-        except ClientError as err:
-            trace.record_exchange(
-                label="Network error", method="?", url="?", network_error=str(err)
-            )
-            trace.log_failure(_LOGGER, "authentication")
-            self._log_auth_stage_failure(stage)
-            raise CannotConnectError("Could not complete KRÉTA login flow") from err
-
-    async def _async_finish_login(self, trace: AuthDiagnosticsTrace | None = None) -> None:
-        """Finish authorization after password or 2FA verification."""
-        trace = trace or AuthDiagnosticsTrace()
-        stage = "oauth_callback"
-        try:
-            callback = await self._safe_session_request("get", CALLBACK_URL, follow_redirects=False)
-            location = callback.headers.get("location")
-            if callback.status not in {302, 303}:
-                callback_body = await callback.text()
-                trace.record_exchange(
-                    label="GET callback",
-                    method="GET",
-                    url=CALLBACK_URL,
-                    response_status=callback.status,
-                    response_body=callback_body,
-                )
-                trace.log_failure(_LOGGER, "authentication")
-                self._log_auth_stage_failure(stage)
-                raise InvalidAuthError(
-                    f"Authorization callback did not redirect, got {callback.status}"
-                )
-            trace.record_exchange(
-                label="GET callback",
-                method="GET",
-                url=CALLBACK_URL,
-                response_status=callback.status,
-                redirect_location=location,
-            )
-            if location is None:
-                trace.log_failure(_LOGGER, "authentication")
-                self._log_auth_stage_failure(stage)
-                raise InvalidAuthError("Authorization callback did not return a redirect URL")
-
-            try:
-                code = extract_authorization_code(location)
-            except InvalidAuthError:
-                self._log_auth_stage_failure(stage)
-                raise
-
-            # Step 4: Exchange the auth code for tokens.
-            stage = "token_exchange"
-            token_request_data: dict[str, Any] = {
-                "code": code,
-                "code_verifier": CODE_VERIFIER,
-                "redirect_uri": ("https://mobil.e-kreta.hu/ellenorzo-student/prod/oauthredirect"),
-                "client_id": CLIENT_ID,
-                "grant_type": "authorization_code",
-            }
             token_response = await self._safe_session_request(
-                "post", TOKEN_URL, data=token_request_data
+                "post", TOKEN_URL, data=request_data, follow_redirects=False
             )
             if token_response.status >= 400:
                 token_body = await token_response.text()
@@ -867,12 +548,12 @@ class KretaApiClient:
                     label="POST token (auth code)",
                     method="POST",
                     url=TOKEN_URL,
-                    request_data=token_request_data,
+                    request_data=request_data,
                     response_status=token_response.status,
                     response_body=token_body,
                 )
                 trace.log_failure(_LOGGER, "authentication")
-                self._log_auth_stage_failure(stage)
+                self._log_auth_stage_failure("token_exchange")
                 raise InvalidAuthError(
                     f"Authorization-code exchange failed with {token_response.status}"
                 )
@@ -880,11 +561,11 @@ class KretaApiClient:
                 label="POST token (auth code)",
                 method="POST",
                 url=TOKEN_URL,
-                request_data=token_request_data,
+                request_data=request_data,
                 response_status=token_response.status,
             )
         except KretaSecurityError:
-            self._log_auth_stage_failure(stage)
+            self._log_auth_stage_failure("token_exchange")
             raise
         except ClientError as err:
             trace.record_exchange(
@@ -894,34 +575,31 @@ class KretaApiClient:
                 network_error=str(err),
             )
             trace.log_failure(_LOGGER, "authentication")
-            self._log_auth_stage_failure(stage)
-            raise CannotConnectError("Could not complete KRÉTA login flow") from err
+            self._log_auth_stage_failure("token_exchange")
+            raise CannotConnectError("Could not reach the KRÉTA token endpoint") from err
 
         try:
             payload = await token_response.json()
         except (ClientError, ValueError) as err:
             self._log_auth_stage_failure("token_exchange")
             raise InvalidAuthError("Token endpoint returned invalid JSON") from err
-        if "access_token" not in payload:
+        required = ("access_token", "refresh_token", "id_token")
+        if any(not isinstance(payload.get(key), str) or not payload[key] for key in required):
             trace.record_exchange(
                 label="POST token (auth code) — unexpected payload",
                 method="POST",
                 url=TOKEN_URL,
-                request_data=token_request_data,
+                request_data=request_data,
                 response_status=token_response.status,
                 response_body=json.dumps(payload),
             )
             trace.log_failure(_LOGGER, "authentication")
             self._log_auth_stage_failure("token_exchange")
-            raise InvalidAuthError("Login response did not include an access token")
+            raise InvalidAuthError("KRÉTA token response omitted a required token")
+        account_key = account_key_from_id_token(payload["id_token"], self._klik_id)
         self._access_token = payload["access_token"]
-        new_refresh = payload.get("refresh_token")
-        if new_refresh is not None:
-            await self._token_store.async_set_refresh_token(new_refresh)
-        else:
-            _LOGGER.warning(
-                "Full login did not return a refresh token",
-            )
+        await self._token_store.async_set_refresh_token(payload["refresh_token"])
+        return account_key
 
     async def _safe_session_request(
         self,
@@ -949,7 +627,6 @@ class KretaApiClient:
                     target, location, self._klik_id, include_messages=include_messages
                 )
             return response
-        # Authentication redirects are followed explicitly and revalidated.
         for _attempt in range(4):
             if response.status not in {301, 302, 303, 307, 308}:
                 return response

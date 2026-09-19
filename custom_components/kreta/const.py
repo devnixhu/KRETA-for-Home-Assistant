@@ -8,6 +8,8 @@ DOMAIN = "kreta"
 
 CONF_KLIK_ID = "klik_id"
 CONF_USER_ID = "user_id"
+CONF_ACCOUNT_KEY = "account_key"
+CONF_OAUTH_REDIRECT_URL = "oauth_redirect_url"
 CONF_REFRESH_HOURS = "refresh_hours"
 CONF_REFRESH_MINUTES = "refresh_minutes"
 CONF_LOOKAHEAD_WEEKS = "lookahead_weeks"

@@ -6,7 +6,6 @@ from .network_policy import normalize_institution
 
 IDP_BASE = "https://idp.e-kreta.hu"
 TOKEN_URL = f"{IDP_BASE}/connect/token"
-LOGIN_URL = f"{IDP_BASE}/account/login"
 MESSAGES_URL = "https://eugyintezes.e-kreta.hu/api/v1/kommunikacio/postaladaelemek/beerkezett"
 
 

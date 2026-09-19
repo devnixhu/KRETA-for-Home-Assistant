@@ -1,62 +1,52 @@
 {
   "title": "KRÉTA",
-
   "config": {
     "step": {
       "user": {
         "title": "KRÉTA beállítása",
-        "description": "Add meg egy tanulói fiók belépési adatait.",
+        "description": "A bejelentkezés a KRÉTA hivatalos oldalán történik. Az integráció nem fér hozzá a jelszavadhoz vagy a kétlépcsős azonosítási kódodhoz.",
         "data": {
           "klik_id": "KLIK-azonosító",
-          "user_id": "Felhasználói azonosító",
-          "password": "Jelszó",
           "refresh_minutes": "Frissítési időköz (perc)",
           "lookahead_weeks": "Naptár előretekintése (hét)"
         }
       },
-
-      "two_factor": {
-        "title": "Kétlépcsős azonosítás",
-        "description": "Add meg az aktuális hitelesítő kódot vagy egy még fel nem használt helyreállítási kódot. A kódot az integráció csak egyszer használja, és nem tárolja.",
+      "oauth_callback": {
+        "title": "Bejelentkezés KRÉTA-val",
+        "description": "Nyisd meg a [KRÉTA hivatalos bejelentkezési oldalát]({authorization_url}), végezd el a belépést és a kétlépcsős azonosítást, majd másold be ide a végén megnyitott teljes visszatérési URL-t. Az integráció ebből kizárólag az egyszer használható OAuth-adatokat olvassa ki.",
         "data": {
-          "two_factor_code": "Hitelesítési kód"
+          "oauth_redirect_url": "Visszatérési URL"
         }
       },
-
       "reauth_confirm": {
         "title": "KRÉTA-fiók újbóli hitelesítése",
-        "description": "Add meg az új jelszót ehhez a fiókhoz: {user_id} ({klik_id}).",
-        "data": {
-          "password": "Jelszó"
-        }
+        "description": "A folytatás a KRÉTA hivatalos bejelentkezési oldalát nyitja meg. A Home Assistant nem kér jelszót vagy kétlépcsős azonosítási kódot."
       },
-
       "reconfigure": {
         "title": "KRÉTA-fiók újrakonfigurálása",
-        "description": "Frissítsd a KRÉTA-fiók belépési adatait.",
+        "description": "A módosítás megerősítéséhez új KRÉTA OAuth-bejelentkezés szükséges.",
         "data": {
           "klik_id": "KLIK-azonosító",
-          "user_id": "Felhasználói azonosító",
-          "password": "Jelszó"
+          "refresh_minutes": "Frissítési időköz (perc)",
+          "lookahead_weeks": "Naptár előretekintése (hét)"
         }
       }
     },
-
     "error": {
       "cannot_connect": "Nem sikerült kapcsolódni a KRÉTA rendszerhez.",
-      "invalid_auth": "A hitelesítés sikertelen.",
-      "invalid_two_factor": "A hitelesítési kód érvénytelen vagy lejárt.",
       "invalid_institution": "Az intézményi azonosító érvénytelen.",
-      "unknown": "Váratlan hiba történt."
+      "oauth_state_mismatch": "A visszatérési URL nem ehhez a bejelentkezési kísérlethez tartozik.",
+      "oauth_callback_invalid": "A visszatérési URL érvénytelen vagy nem hivatalos KRÉTA-címről származik.",
+      "oauth_code_missing": "A visszatérési URL nem tartalmaz hitelesítési kódot.",
+      "token_exchange_failed": "A KRÉTA nem fogadta el az egyszer használható hitelesítési adatot. Indíts új bejelentkezést."
     },
-
     "abort": {
-      "already_configured": "Ez a tanulói fiók már be van állítva.",
+      "already_configured": "Ez a KRÉTA-fiók már be van állítva.",
       "reauth_successful": "Az újbóli hitelesítés sikeres volt.",
-      "reconfigure_successful": "Az újrakonfigurálás sikeres volt."
+      "reconfigure_successful": "Az újrakonfigurálás sikeres volt.",
+      "oauth_start_failed": "A KRÉTA OAuth-bejelentkezés állapota lejárt. Indíts új beállítást."
     }
   },
-
   "options": {
     "step": {
       "init": {
