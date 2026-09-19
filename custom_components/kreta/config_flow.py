@@ -44,6 +44,7 @@ from .const import (
     MIN_LOOKAHEAD_WEEKS,
     MIN_REFRESH_MINUTES,
 )
+from .oauth_start import register_oauth_start
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -135,7 +136,10 @@ class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._pending_data[CONF_KLIK_ID] = institution
         self._attempt = PkceAttempt.create()
         self._authorization_url = build_authorization_url(institution, self._attempt)
-        return self._show_oauth_callback()
+        start_url = register_oauth_start(
+            self.hass, self.flow_id, institution, self._authorization_url
+        )
+        return self.async_external_step(step_id="browser", url=start_url)
 
     def _show_oauth_callback(
         self, errors: dict[str, str] | None = None
@@ -254,6 +258,14 @@ class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             refresh_token,
             profile.school_name or "KRÉTA fiók",
         )
+
+    async def async_step_browser(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Advance after the authenticated local launcher opens the new tab."""
+        if user_input is None:
+            return self.async_abort(reason="oauth_start_failed")
+        return self.async_external_step_done(next_step_id="oauth_callback")
 
     async def async_step_reauth(
         self, entry_data: Mapping[str, Any]

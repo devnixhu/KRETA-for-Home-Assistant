@@ -18,6 +18,10 @@
           "oauth_redirect_url": "Visszatérési URL"
         }
       },
+      "browser": {
+        "title": "Bejelentkezés KRÉTA-val",
+        "description": "A Home Assistant új lapon nyitja meg a KRÉTA hivatalos bejelentkezési oldalát."
+      },
       "reauth_confirm": {
         "title": "KRÉTA-fiók újbóli hitelesítése",
         "description": "A folytatás a KRÉTA hivatalos bejelentkezési oldalát nyitja meg. A Home Assistant nem kér jelszót vagy kétlépcsős azonosítási kódot."

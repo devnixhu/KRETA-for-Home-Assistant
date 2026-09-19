@@ -14,7 +14,9 @@ A Home Assistant nem tudja a Firka WebView-jához hasonlóan elfogni egy által�
 
 ## Kiválasztott megoldás
 
-A config flow a hivatalos KRÉTA belépési URL-t jeleníti meg. A felhasználó közvetlenül a KRÉTA oldalán adja meg a felhasználónevet, a jelszót és a kétlépcsős kódot. A végső mobil redirect URL-t visszamásolja a Home Assistantba.
+A config flow Home Assistant external stepet ad vissza, amely egy új böngészőlapon egy öt percig érvényes, aláírt helyi indító URL-t nyit meg. Az indító egy kriptográfiailag véletlen, egyszer használható azonosítót fogyaszt el, ismét ellenőrzi a célcímet a hálózati allowlisttel, majd HTTP 302 válasszal a hivatalos KRÉTA belépési URL-re irányít. A helyi URL nem tartalmaz authorization code-ot, tokent, jelszót, kétlépcsős kódot vagy PKCE verifiert.
+
+A felhasználó közvetlenül a KRÉTA oldalán adja meg a felhasználónevet, a jelszót és a kétlépcsős kódot. A végső mobil redirect URL-t visszamásolja a Home Assistantba.
 
 Az integráció elfogadás előtt ellenőrzi a HTTPS sémát, a pontos `mobil.e-kreta.hu` hostot, a rögzített visszatérési útvonalat és a kriptográfiailag véletlen state értéket. Ezután az authorization code-ot a csak memóriában élő PKCE verifierrel cseréli tokenekre. Az authorization code, state, nonce, verifier, access token és ID token nem kerül tartós tárolásba. Tartósan csak a refresh token és egy hash-elt, nem azonosító account key marad meg.
 

@@ -167,11 +167,11 @@ A végeredmény például így nézzen ki:
 3. Keresd meg a **KRÉTA** integrációt.
 
 4. Add meg az intézményi azonosítót és a frissítési beállításokat.
-5. Nyisd meg a megjelenő hivatalos KRÉTA bejelentkezési hivatkozást.
+5. A Home Assistant egy új böngészőlapon megnyitja a hivatalos KRÉTA bejelentkezési oldalt.
 6. A KRÉTA oldalán végezd el a jelszavas és szükség esetén a kétlépcsős azonosítást.
 7. Másold vissza a Home Assistantba a böngészőben megnyitott teljes végső visszatérési URL-t.
 
-A Home Assistant nem kapja meg a KRÉTA-felhasználónevet, a jelszót vagy a kétlépcsős azonosítási kódot. A visszatérési URL egyszer használható OAuth-kódját PKCE védi, és az integráció ellenőrzi a hostot, az útvonalat és a bejelentkezési kísérlethez tartozó `state` értéket.
+A böngésző először egy öt percig érvényes, Home Assistant által aláírt és egyszer használható helyi indító URL-t nyit meg, amely csak ellenőrzött KRÉTA-címre irányíthat át. A Home Assistant nem kapja meg a KRÉTA-felhasználónevet, a jelszót vagy a kétlépcsős azonosítási kódot. A visszatérési URL egyszer használható OAuth-kódját PKCE védi, és az integráció ellenőrzi a hostot, az útvonalat és a bejelentkezési kísérlethez tartozó `state` értéket.
 
 Több KRÉTA-fiók külön integrációs példányként adható hozzá.
 

@@ -15,6 +15,7 @@ from .api.client import KretaApiClient
 from .api.storage import KretaTokenStore, entry_storage_key
 from .const import DOMAIN, PLATFORMS
 from .coordinator import KretaDataUpdateCoordinator
+from .oauth_start import OAUTH_STARTS, KretaOAuthStartView
 
 type KretaConfigEntry = ConfigEntry
 
@@ -31,7 +32,9 @@ class KretaRuntimeData:
 
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     """Set up the Kreta integration."""
-    hass.data.setdefault(DOMAIN, {})
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    domain_data.setdefault(OAUTH_STARTS, {})
+    hass.http.register_view(KretaOAuthStartView)
     return True
 
 

@@ -9,6 +9,8 @@ from collections import deque
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
+from homeassistant import data_entry_flow
 
 from custom_components.kreta.api.client import KretaApiClient
 from custom_components.kreta.api.diagnostics import (
@@ -53,8 +55,14 @@ from custom_components.kreta.const import (
     CONF_MESSAGES,
     CONF_OAUTH_REDIRECT_URL,
     CONF_REFRESH_MINUTES,
+    DOMAIN,
 )
 from custom_components.kreta.coordinator import KretaDataUpdateCoordinator
+from custom_components.kreta.oauth_start import (
+    OAUTH_STARTS,
+    KretaOAuthStartView,
+    OAuthStart,
+)
 
 
 def _jwt(payload: dict[str, str]) -> str:
@@ -241,21 +249,86 @@ def test_config_schema_has_no_local_credentials_or_two_factor() -> None:
     assert "two_factor_code" not in keys
 
 
-async def test_config_flow_starts_browser_oauth() -> None:
+async def test_config_flow_starts_browser_oauth(hass, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "custom_components.kreta.oauth_start.get_url", lambda *_args, **_kwargs: "https://ha.local"
+    )
+    monkeypatch.setattr(
+        "custom_components.kreta.oauth_start.async_sign_path",
+        lambda _hass, path, _expiration, **_kwargs: f"{path}?authSig=signed",
+    )
     flow = KretaConfigFlow()
+    flow.hass = hass
+    flow._flow_id = "flow-start"
     result = await flow.async_step_user(
         {CONF_KLIK_ID: "school01", CONF_REFRESH_MINUTES: 10, CONF_LOOKAHEAD_WEEKS: 2}
     )
-    assert result["type"] == "form"
-    assert result["step_id"] == "oauth_callback"
-    assert result["description_placeholders"]["authorization_url"].startswith(
-        "https://idp.e-kreta.hu/Account/Login"
-    )
+    assert result["type"] == "external"
+    assert result["step_id"] == "browser"
+    assert result["url"].startswith("https://ha.local/api/kreta/oauth/start/")
+    assert "authSig=signed" in result["url"]
     assert flow._attempt is not None
+    assert "idp.e-kreta.hu" not in result["url"]
+    assert flow._attempt.code_verifier not in result["url"]
+    assert flow._attempt.state not in result["url"]
+    finished = await flow.async_step_browser({"opened": True})
+    assert finished["type"] == "external_done"
+    assert finished["step_id"] == "oauth_callback"
 
 
-async def test_config_flow_rejects_callback_state_mismatch() -> None:
+async def test_oauth_launcher_is_one_time_and_validates_destination() -> None:
+    class _FlowManager:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def async_configure(self, flow_id, user_input):
+            self.calls.append((flow_id, user_input))
+            return {"type": data_entry_flow.FlowResultType.EXTERNAL_STEP_DONE}
+
+    manager = _FlowManager()
+    handle = "one-time-handle"
+    destination = "https://idp.e-kreta.hu/Account/Login?ReturnUrl=%2Fconnect"
+    hass = SimpleNamespace(
+        data={DOMAIN: {OAUTH_STARTS: {handle: OAuthStart("flow-id", "school01", destination)}}},
+        config_entries=SimpleNamespace(flow=manager),
+    )
+    request = SimpleNamespace(app={"hass": hass})
+    view = KretaOAuthStartView()
+    with pytest.raises(web.HTTPFound) as redirect:
+        await view.get(request, handle)
+    assert redirect.value.location == destination
+    assert manager.calls == [("flow-id", {"opened": True})]
+    with pytest.raises(web.HTTPNotFound):
+        await view.get(request, handle)
+
+
+async def test_oauth_launcher_blocks_external_destination() -> None:
+    handle = "blocked-handle"
+    hass = SimpleNamespace(
+        data={
+            DOMAIN: {
+                OAUTH_STARTS: {
+                    handle: OAuthStart("flow-id", "school01", "https://evil.example/login")
+                }
+            }
+        }
+    )
+    request = SimpleNamespace(app={"hass": hass})
+    with pytest.raises(KretaSecurityError):
+        await KretaOAuthStartView().get(request, handle)
+
+
+async def test_config_flow_rejects_callback_state_mismatch(hass, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "custom_components.kreta.oauth_start.get_url", lambda *_args, **_kwargs: "https://ha.local"
+    )
+    monkeypatch.setattr(
+        "custom_components.kreta.oauth_start.async_sign_path",
+        lambda _hass, path, _expiration, **_kwargs: f"{path}?authSig=signed",
+    )
     flow = KretaConfigFlow()
+    flow.hass = hass
+    flow._flow_id = "flow-mismatch"
     await flow.async_step_user(
         {CONF_KLIK_ID: "school01", CONF_REFRESH_MINUTES: 10, CONF_LOOKAHEAD_WEEKS: 2}
     )
@@ -266,14 +339,23 @@ async def test_config_flow_rejects_callback_state_mismatch() -> None:
     assert result["errors"] == {"base": "oauth_state_mismatch"}
 
 
-async def test_reauthentication_launches_new_oauth_attempt() -> None:
+async def test_reauthentication_launches_new_oauth_attempt(hass, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "custom_components.kreta.oauth_start.get_url", lambda *_args, **_kwargs: "https://ha.local"
+    )
+    monkeypatch.setattr(
+        "custom_components.kreta.oauth_start.async_sign_path",
+        lambda _hass, path, _expiration, **_kwargs: f"{path}?authSig=signed",
+    )
     flow = KretaConfigFlow()
+    flow.hass = hass
+    flow._flow_id = "flow-reauth"
     entry = SimpleNamespace(
         data={CONF_KLIK_ID: "school01", CONF_ACCOUNT_KEY: "a" * 64}
     )
     flow._get_reauth_entry = lambda: entry
     result = await flow.async_step_reauth_confirm({})
-    assert result["step_id"] == "oauth_callback"
+    assert result["step_id"] == "browser"
     assert flow._pending_mode == "reauth"
 
 

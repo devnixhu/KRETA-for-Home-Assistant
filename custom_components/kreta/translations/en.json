@@ -18,6 +18,10 @@
           "oauth_redirect_url": "Redirect URL"
         }
       },
+      "browser": {
+        "title": "Sign in with KRÉTA",
+        "description": "Home Assistant opens the official KRÉTA sign-in page in a new tab."
+      },
       "reauth_confirm": {
         "title": "Re-authenticate KRÉTA",
         "description": "Continuing opens the official KRÉTA sign-in page. Home Assistant does not request a password or two-factor authentication code."
