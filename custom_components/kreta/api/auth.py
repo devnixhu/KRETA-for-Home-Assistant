@@ -57,10 +57,17 @@ REQUEST_VERIFICATION_TOKEN_RE = re.compile(
 
 def extract_request_verification_token(html: str) -> str:
     """Extract the request verification token from the login page HTML."""
-    match = REQUEST_VERIFICATION_TOKEN_RE.search(html)
-    if match is None:
-        raise InvalidAuthError("Missing request verification token in login page")
-    return match.group(1)
+    parser = _FormParser()
+    parser.feed(html[:200_000])
+
+    for _action, fields in parser.forms:
+        token = fields.get("__RequestVerificationToken")
+        if token:
+            return token
+
+    raise InvalidAuthError(
+        "Missing request verification token in login page"
+    )
 
 
 def extract_authorization_code(redirect_location: str) -> str:
