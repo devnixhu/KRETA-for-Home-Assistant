@@ -1,4 +1,3 @@
-"""Small, recorder-friendly KRÉTA Secure sensors."""
 
 from __future__ import annotations
 

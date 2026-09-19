@@ -23,13 +23,11 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Kreta calendar entities from a config entry."""
     runtime_data: KretaRuntimeData = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([KretaCalendarEntity(entry, runtime_data)])
 
 
 class KretaCalendarEntity(KretaEntity, CalendarEntity):
-    """Representation of Kreta events as a calendar."""
 
     def __init__(self, entry: ConfigEntry, runtime_data: KretaRuntimeData) -> None:
         """Initialize the calendar entity."""
@@ -46,7 +44,6 @@ class KretaCalendarEntity(KretaEntity, CalendarEntity):
 
     @property
     def event(self) -> CalendarEvent | None:
-        """Return the current or next upcoming event."""
         if self.coordinator.data is None:
             return None
 

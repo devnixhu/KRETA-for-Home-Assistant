@@ -1,66 +1,75 @@
 {
-  "title": "KRÉTA Secure",
+  "title": "KRÉTA",
+
   "config": {
     "step": {
       "user": {
-        "title": "Set up Kreta",
-        "description": "Enter the credentials for one pupil account.",
+        "title": "KRÉTA beállítása",
+        "description": "Add meg egy tanulói fiók belépési adatait.",
         "data": {
-          "klik_id": "KLIK ID",
-          "user_id": "User ID",
-          "password": "Password",
-          "refresh_minutes": "Refresh interval (minutes)",
-          "lookahead_weeks": "Calendar lookahead (weeks)"
+          "klik_id": "KLIK-azonosító",
+          "user_id": "Felhasználói azonosító",
+          "password": "Jelszó",
+          "refresh_minutes": "Frissítési időköz (perc)",
+          "lookahead_weeks": "Naptár előretekintése (hét)"
         }
       },
+
       "two_factor": {
-        "title": "Two-factor authentication",
-        "description": "Enter the current authenticator or unused recovery code. It is used once and is never stored.",
-        "data": {"two_factor_code": "Authentication code"}
-      },
-      "reauth_confirm": {
-        "title": "Re-authenticate Kreta",
-        "description": "Enter the new password for {user_id} ({klik_id}).",
+        "title": "Kétlépcsős azonosítás",
+        "description": "Add meg az aktuális hitelesítő kódot vagy egy még fel nem használt helyreállítási kódot. A kódot az integráció csak egyszer használja, és nem tárolja.",
         "data": {
-          "password": "Password"
+          "two_factor_code": "Hitelesítési kód"
         }
       },
-      "reconfigure": {
-        "title": "Reconfigure Kreta",
-        "description": "Update the credentials for this Kreta account.",
+
+      "reauth_confirm": {
+        "title": "KRÉTA-fiók újbóli hitelesítése",
+        "description": "Add meg az új jelszót ehhez a fiókhoz: {user_id} ({klik_id}).",
         "data": {
-          "klik_id": "KLIK ID",
-          "user_id": "User ID",
-          "password": "Password"
+          "password": "Jelszó"
+        }
+      },
+
+      "reconfigure": {
+        "title": "KRÉTA-fiók újrakonfigurálása",
+        "description": "Frissítsd a KRÉTA-fiók belépési adatait.",
+        "data": {
+          "klik_id": "KLIK-azonosító",
+          "user_id": "Felhasználói azonosító",
+          "password": "Jelszó"
         }
       }
     },
+
     "error": {
-      "cannot_connect": "Failed to connect to Kreta.",
-      "invalid_auth": "Authentication failed.",
-      "invalid_two_factor": "The authentication code was rejected or expired.",
-      "invalid_institution": "The institution identifier is invalid.",
-      "unknown": "Unexpected error."
+      "cannot_connect": "Nem sikerült kapcsolódni a KRÉTA rendszerhez.",
+      "invalid_auth": "A hitelesítés sikertelen.",
+      "invalid_two_factor": "A hitelesítési kód érvénytelen vagy lejárt.",
+      "invalid_institution": "Az intézményi azonosító érvénytelen.",
+      "unknown": "Váratlan hiba történt."
     },
+
     "abort": {
-      "already_configured": "This pupil account is already configured.",
-      "reauth_successful": "Re-authentication was successful.",
-      "reconfigure_successful": "Reconfiguration was successful."
+      "already_configured": "Ez a tanulói fiók már be van állítva.",
+      "reauth_successful": "Az újbóli hitelesítés sikeres volt.",
+      "reconfigure_successful": "Az újrakonfigurálás sikeres volt."
     }
   },
+
   "options": {
     "step": {
       "init": {
-        "title": "Kreta options",
+        "title": "KRÉTA beállítások",
         "data": {
-          "refresh_minutes": "Refresh interval (minutes)",
-          "lookahead_weeks": "Calendar lookahead (weeks)",
-          "timetable": "Timetable",
-          "grades": "Grades",
-          "homework": "Homework",
-          "tests": "Tests",
-          "messages": "Messages (metadata only)",
-          "absences": "Absences"
+          "refresh_minutes": "Frissítési időköz (perc)",
+          "lookahead_weeks": "Naptár előretekintése (hét)",
+          "timetable": "Órarend",
+          "grades": "Érdemjegyek",
+          "homework": "Házi feladatok",
+          "tests": "Számonkérések",
+          "messages": "Üzenetek (csak metaadatok)",
+          "absences": "Hiányzások"
         }
       }
     }

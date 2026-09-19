@@ -1,12 +1,12 @@
 {
   "domain": "kreta",
-  "name": "KRÉTA Secure",
-  "codeowners": ["@major"],
+  "name": "KRÉTA ,,Iskolai ALaprendszer'' for Home Assistant",
+  "codeowners": [
+    "@devnixhu"
+  ],
   "config_flow": true,
-  "documentation": "https://github.com/major/kreta-homeassistant/blob/main/README.md",
-  "integration_type": "service",
-  "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/major/kreta-homeassistant/issues",
-  "requirements": [],
-  "version": "2026.9.19"
+  "documentation": "https://github.com/devnixhu/KRETA-for-Home-Assistant",
+  "issue_tracker": "https://github.com/devnixhu/KRETA-for-Home-Assistant/issues",
+  "version": "1.6.7",
+  "iot_class": "cloud_polling"
 }
