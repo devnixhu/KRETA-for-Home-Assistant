@@ -60,8 +60,10 @@ from custom_components.kreta.const import (
 from custom_components.kreta.coordinator import KretaDataUpdateCoordinator
 from custom_components.kreta.oauth_start import (
     OAUTH_STARTS,
+    OAUTH_VIEW_REGISTERED,
     KretaOAuthStartView,
     OAuthStart,
+    ensure_oauth_start_view,
 )
 
 
@@ -250,6 +252,12 @@ def test_config_schema_has_no_local_credentials_or_two_factor() -> None:
 
 
 async def test_config_flow_starts_browser_oauth(hass, monkeypatch) -> None:
+    registered_views = []
+    monkeypatch.setattr(
+        hass,
+        "http",
+        SimpleNamespace(register_view=lambda view: registered_views.append(view)),
+    )
     monkeypatch.setattr(
         "custom_components.kreta.oauth_start.get_url", lambda *_args, **_kwargs: "https://ha.local"
     )
@@ -271,6 +279,7 @@ async def test_config_flow_starts_browser_oauth(hass, monkeypatch) -> None:
     assert "idp.e-kreta.hu" not in result["url"]
     assert flow._attempt.code_verifier not in result["url"]
     assert flow._attempt.state not in result["url"]
+    assert registered_views == [KretaOAuthStartView]
     finished = await flow.async_step_browser({"opened": True})
     assert finished["type"] == "external_done"
     assert finished["step_id"] == "oauth_callback"
@@ -302,6 +311,17 @@ async def test_oauth_launcher_is_one_time_and_validates_destination() -> None:
         await view.get(request, handle)
 
 
+def test_oauth_launcher_view_is_registered_once() -> None:
+    registered_views = []
+    hass = SimpleNamespace(
+        data={}, http=SimpleNamespace(register_view=lambda view: registered_views.append(view))
+    )
+    ensure_oauth_start_view(hass)
+    ensure_oauth_start_view(hass)
+    assert registered_views == [KretaOAuthStartView]
+    assert hass.data[DOMAIN][OAUTH_VIEW_REGISTERED] is True
+
+
 async def test_oauth_launcher_blocks_external_destination() -> None:
     handle = "blocked-handle"
     hass = SimpleNamespace(
@@ -319,6 +339,11 @@ async def test_oauth_launcher_blocks_external_destination() -> None:
 
 
 async def test_config_flow_rejects_callback_state_mismatch(hass, monkeypatch) -> None:
+    monkeypatch.setattr(
+        hass,
+        "http",
+        SimpleNamespace(register_view=lambda _view: None),
+    )
     monkeypatch.setattr(
         "custom_components.kreta.oauth_start.get_url", lambda *_args, **_kwargs: "https://ha.local"
     )
@@ -340,6 +365,11 @@ async def test_config_flow_rejects_callback_state_mismatch(hass, monkeypatch) ->
 
 
 async def test_reauthentication_launches_new_oauth_attempt(hass, monkeypatch) -> None:
+    monkeypatch.setattr(
+        hass,
+        "http",
+        SimpleNamespace(register_view=lambda _view: None),
+    )
     monkeypatch.setattr(
         "custom_components.kreta.oauth_start.get_url", lambda *_args, **_kwargs: "https://ha.local"
     )

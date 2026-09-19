@@ -17,6 +17,7 @@ from .api.network_policy import validate_url
 from .const import DOMAIN
 
 OAUTH_STARTS = "_oauth_starts"
+OAUTH_VIEW_REGISTERED = "_oauth_view_registered"
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,10 +29,20 @@ class OAuthStart:
     authorization_url: str
 
 
+def ensure_oauth_start_view(hass: HomeAssistant) -> None:
+    """Register the launcher view before the first config entry exists."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if domain_data.get(OAUTH_VIEW_REGISTERED):
+        return
+    hass.http.register_view(KretaOAuthStartView)
+    domain_data[OAUTH_VIEW_REGISTERED] = True
+
+
 def register_oauth_start(
     hass: HomeAssistant, flow_id: str, institution: str, authorization_url: str
 ) -> str:
     """Register a bounded one-time launcher and return its local URL."""
+    ensure_oauth_start_view(hass)
     starts: dict[str, OAuthStart] = hass.data.setdefault(DOMAIN, {}).setdefault(
         OAUTH_STARTS, {}
     )
