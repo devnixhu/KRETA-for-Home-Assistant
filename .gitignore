@@ -31,5 +31,3 @@ htmlcov/
 
 # Local Home Assistant dev instance
 .homeassistant-dev/
-
-*.md
