@@ -28,7 +28,6 @@ async def async_setup_entry(
 
 
 class KretaCalendarEntity(KretaEntity, CalendarEntity):
-
     def __init__(self, entry: ConfigEntry, runtime_data: KretaRuntimeData) -> None:
         """Initialize the calendar entity."""
         super().__init__(entry, runtime_data)

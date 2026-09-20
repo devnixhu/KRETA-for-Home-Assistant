@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
@@ -53,6 +54,15 @@ def _response_endpoint(response: ClientResponse, fallback_url: str) -> str:
     """Return a query-free endpoint label for a response."""
     response_url = getattr(response, "url", None)
     return _endpoint_label(str(response_url) if response_url else fallback_url)
+
+
+def _date_chunks(start_date: date, end_date: date, days: int = 28) -> Iterator[tuple[date, date]]:
+    """Yield inclusive bounded date ranges."""
+    chunk_start = start_date
+    while chunk_start <= end_date:
+        chunk_end = min(chunk_start + timedelta(days=days - 1), end_date)
+        yield chunk_start, chunk_end
+        chunk_start = chunk_end + timedelta(days=1)
 
 
 class KretaApiClient:
@@ -127,48 +137,66 @@ class KretaApiClient:
     ) -> list[MergedCalendarEvent]:
         """Fetch timetable entries and normalize them to lesson events."""
         _LOGGER.info("Fetching lessons %s → %s", start_date, end_date)
-        payload = await self._async_get_json(
-            "Sajat/OrarendElemek",
-            params={"datumTol": start_date.isoformat(), "datumIg": end_date.isoformat()},
-        )
         lessons: list[MergedCalendarEvent] = []
-        for item in payload:
-            lesson_type = item.get("Tipus", {}).get("Nev")
-            if lesson_type not in {"TanitasiOra", "OrarendiOra"}:
-                continue
-            start_raw = item.get("KezdetIdopont")
-            end_raw = item.get("VegIdopont")
-            if start_raw is None or end_raw is None:
-                _LOGGER.warning("Skipping a lesson with missing time fields")
-                continue
-            start = self._parse_datetime(start_raw)
-            end = self._parse_datetime(end_raw)
-            subject = item.get("Nev") or item.get("Tantargy", {}).get("Nev") or "Ora"
-            room = item.get("TeremNeve")
-            lesson_index = item.get("Oraszam")
-            description = "\n".join(
-                part
-                for part in (
-                    f"Tantargy: {subject}",
-                    f"Terem: {room}" if room else None,
-                    f"Oraszam: {lesson_index}" if lesson_index is not None else None,
-                )
-                if part
+        for chunk_start, chunk_end in _date_chunks(start_date, end_date):
+            payload = await self._async_get_json(
+                "Sajat/OrarendElemek",
+                params={"datumTol": chunk_start.isoformat(), "datumIg": chunk_end.isoformat()},
             )
-            lessons.append(
-                MergedCalendarEvent(
-                    uid=f"lesson-{start.isoformat()}-{lesson_index or 0}-{subject.casefold()}",
-                    start=start,
-                    end=end,
-                    summary=subject,
-                    description=description,
-                    location=room,
-                    lesson_index=lesson_index,
-                    subject_name=subject,
-                    exam=None,
-                    source="lesson",
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                lesson_type = str((item.get("Tipus") or {}).get("Nev") or "")
+                if lesson_type not in {"TanitasiOra", "OrarendiOra"}:
+                    continue
+                start_raw = item.get("KezdetIdopont")
+                end_raw = item.get("VegIdopont")
+                if not isinstance(start_raw, str) or not isinstance(end_raw, str):
+                    _LOGGER.warning("Skipping a lesson with missing time fields")
+                    continue
+                start = self._parse_datetime(start_raw)
+                end = self._parse_datetime(end_raw)
+                subject = str(item.get("Nev") or (item.get("Tantargy") or {}).get("Nev") or "Óra")
+                room = item.get("TeremNeve")
+                lesson_index = item.get("Oraszam")
+                topic = item.get("Tema")
+                teacher = item.get("TanarNeve")
+                substitute = item.get("HelyettesTanarNeve")
+                state = str((item.get("Allapot") or {}).get("Nev") or "")
+                state_key = state.casefold()
+                uid = str(item.get("Uid") or "")
+                if not uid:
+                    uid = f"lesson-{start.isoformat()}-{lesson_index or 0}-{subject.casefold()}"
+                description = "\n".join(
+                    str(value) for value in (topic, teacher, substitute) if value
                 )
-            )
+                lessons.append(
+                    MergedCalendarEvent(
+                        uid=uid,
+                        start=start,
+                        end=end,
+                        summary=subject,
+                        description=description or None,
+                        location=str(room) if room else None,
+                        lesson_index=lesson_index if isinstance(lesson_index, int) else None,
+                        subject_name=subject,
+                        exam=None,
+                        source="lesson",
+                        teacher_name=str(teacher) if teacher else None,
+                        substitute_teacher_name=str(substitute) if substitute else None,
+                        topic=str(topic) if topic else None,
+                        lesson_type=lesson_type,
+                        state=state or None,
+                        annual_index=(
+                            item.get("OraEvesSorszama")
+                            if isinstance(item.get("OraEvesSorszama"), int)
+                            else None
+                        ),
+                        is_cancelled="elmarad" in state_key or "torolt" in state_key,
+                        is_substitution=bool(substitute),
+                        is_digital=bool(item.get("IsDigitalisOra")),
+                    )
+                )
         lessons.sort(key=lambda lesson: (lesson.start, lesson.lesson_index or 0, lesson.uid))
         _LOGGER.info("Lessons fetched: %d entries", len(lessons))
         return lessons
@@ -207,6 +235,7 @@ class KretaApiClient:
                         lesson_index=item.get("OrarendiOraOraszama"),
                         theme=item.get("Temaja"),
                         mode=item.get("Modja", {}).get("Leiras"),
+                        uid=str(item.get("Uid") or ""),
                     )
                 )
             _LOGGER.debug(
@@ -223,26 +252,38 @@ class KretaApiClient:
     async def async_get_grades(self, start_date: date, end_date: date) -> list[Grade]:
         """Fetch grades recorded within the given date range."""
         _LOGGER.info("Fetching grades %s → %s", start_date, end_date)
-        payload = await self._async_get_json(
-            "Sajat/Ertekelesek",
-            params={"datumTol": start_date.isoformat(), "datumIg": end_date.isoformat()},
-        )
         grades: list[Grade] = []
-        for item in payload:
-            recorded = item.get("RogzitesDatuma")
-            if recorded is None:
-                _LOGGER.warning("Skipping a grade with a missing date")
-                continue
-            grades.append(
-                Grade(
-                    grade_date=self._parse_local_date(recorded),
-                    subject_name=item.get("Tantargy", {}).get("Nev") or "Ismeretlen tantargy",
-                    grade_type=item.get("Tipus", {}).get("Leiras"),
-                    value=item.get("SzovegesErtek"),
-                    topic=item.get("Tema"),
-                    uid=str(item.get("Uid") or ""),
-                )
+        for chunk_start, chunk_end in _date_chunks(start_date, end_date):
+            payload = await self._async_get_json(
+                "Sajat/Ertekelesek",
+                params={"datumTol": chunk_start.isoformat(), "datumIg": chunk_end.isoformat()},
             )
+            for item in payload:
+                recorded = item.get("RogzitesDatuma")
+                if not isinstance(recorded, str):
+                    _LOGGER.warning("Skipping a grade with a missing date")
+                    continue
+                numeric = item.get("SzamErtek")
+                weight = item.get("SulySzazalekErteke")
+                grades.append(
+                    Grade(
+                        grade_date=self._parse_local_date(recorded),
+                        created_at=self._parse_datetime(recorded),
+                        subject_name=(item.get("Tantargy") or {}).get("Nev")
+                        or "Ismeretlen tantárgy",
+                        grade_type=(item.get("Tipus") or {}).get("Leiras"),
+                        value=item.get("SzovegesErtek"),
+                        numeric_value=(
+                            float(numeric) if isinstance(numeric, (int, float)) else None
+                        ),
+                        weight_percentage=weight if isinstance(weight, int) else None,
+                        teacher_name=item.get("ErtekeloTanarNeve"),
+                        topic=item.get("Tema"),
+                        mode=(item.get("Mod") or {}).get("Leiras"),
+                        value_type=(item.get("ErtekFajta") or {}).get("Nev"),
+                        uid=str(item.get("Uid") or ""),
+                    )
+                )
         grades.sort(key=lambda grade: (grade.grade_date, grade.subject_name))
         _LOGGER.info("Grades fetched: %d entries", len(grades))
         return grades
@@ -250,26 +291,38 @@ class KretaApiClient:
     async def async_get_homework(self, start_date: date, end_date: date) -> list[HomeworkItem]:
         """Fetch homework due within the given date range."""
         _LOGGER.info("Fetching homework %s → %s", start_date, end_date)
-        payload = await self._async_get_json(
-            "Sajat/HaziFeladatok",
-            params={"datumTol": start_date.isoformat(), "datumIg": end_date.isoformat()},
-        )
         homework: list[HomeworkItem] = []
-        for item in payload:
-            deadline = item.get("HataridoDatuma")
-            if deadline is None:
-                _LOGGER.warning("Skipping homework with a missing deadline")
-                continue
-            assigned = item.get("RogzitesIdopontja")
-            homework.append(
-                HomeworkItem(
-                    subject_name=item.get("TantargyNeve") or "Ismeretlen tantargy",
-                    description=item.get("Szoveg"),
-                    due_date=self._parse_local_date(deadline),
-                    assigned_date=self._parse_local_date(assigned) if assigned else None,
-                    uid=str(item.get("Uid") or ""),
-                )
+        for chunk_start, chunk_end in _date_chunks(start_date, end_date):
+            payload = await self._async_get_json(
+                "Sajat/HaziFeladatok",
+                params={"datumTol": chunk_start.isoformat(), "datumIg": chunk_end.isoformat()},
             )
+            for item in payload:
+                deadline = item.get("HataridoDatuma")
+                if not isinstance(deadline, str):
+                    _LOGGER.warning("Skipping homework with a missing deadline")
+                    continue
+                assigned = item.get("FeladasDatuma") or item.get("RogzitesIdopontja")
+                homework.append(
+                    HomeworkItem(
+                        subject_name=item.get("TantargyNeve") or "Ismeretlen tantárgy",
+                        description=item.get("Szoveg"),
+                        due_date=self._parse_local_date(deadline),
+                        assigned_date=self._parse_local_date(assigned) if assigned else None,
+                        uid=str(item.get("Uid") or ""),
+                        teacher_name=item.get("RogzitoTanarNeve"),
+                        is_done=(
+                            item.get("IsMegoldva")
+                            if isinstance(item.get("IsMegoldva"), bool)
+                            else None
+                        ),
+                        can_submit=(
+                            item.get("IsBeadhato")
+                            if isinstance(item.get("IsBeadhato"), bool)
+                            else None
+                        ),
+                    )
+                )
         homework.sort(key=lambda item: (item.due_date, item.subject_name))
         _LOGGER.info("Homework fetched: %d entries", len(homework))
         return homework
@@ -298,32 +351,44 @@ class KretaApiClient:
 
     async def async_get_absences(self, start_date: date, end_date: date) -> list[Absence]:
         """Fetch and minimize absence records."""
-        payload = await self._async_get_json(
-            "Sajat/Mulasztasok",
-            params={"datumTol": start_date.isoformat(), "datumIg": end_date.isoformat()},
-        )
-        if not isinstance(payload, list) or len(payload) > 5000:
-            raise ApiResponseError("Absence response has an invalid shape or size")
         result: list[Absence] = []
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            raw_date = item.get("Datum") or item.get("KezdetDatum")
-            if not isinstance(raw_date, str):
-                continue
-            result.append(
-                Absence(
-                    uid=str(item.get("Uid") or ""),
-                    absence_date=self._parse_local_date(raw_date),
-                    status=str((item.get("IgazolasAllapota") or {}).get("Nev") or "pending"),
-                    absence_type=str((item.get("Tipus") or {}).get("Nev") or "absence"),
-                    minutes=(
-                        item.get("KesesPercben")
-                        if isinstance(item.get("KesesPercben"), int)
-                        else None
-                    ),
-                )
+        for chunk_start, chunk_end in _date_chunks(start_date, end_date):
+            payload = await self._async_get_json(
+                "Sajat/Mulasztasok",
+                params={"datumTol": chunk_start.isoformat(), "datumIg": chunk_end.isoformat()},
             )
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                raw_date = item.get("Datum") or item.get("KezdetDatum")
+                if not isinstance(raw_date, str):
+                    continue
+                raw_status = item.get("IgazolasAllapota")
+                status = (
+                    raw_status.get("Nev") if isinstance(raw_status, dict) else raw_status
+                ) or "pending"
+                lesson = item.get("Ora") if isinstance(item.get("Ora"), dict) else {}
+                result.append(
+                    Absence(
+                        uid=str(item.get("Uid") or ""),
+                        absence_date=self._parse_local_date(raw_date),
+                        status=str(status),
+                        absence_type=str((item.get("Tipus") or {}).get("Nev") or "absence"),
+                        minutes=(
+                            item.get("KesesPercben")
+                            if isinstance(item.get("KesesPercben"), int)
+                            else None
+                        ),
+                        subject_name=(item.get("Tantargy") or {}).get("Nev"),
+                        teacher_name=item.get("RogzitoTanarNeve"),
+                        lesson_index=(
+                            lesson.get("Oraszam")
+                            if isinstance(lesson.get("Oraszam"), int)
+                            else None
+                        ),
+                    )
+                )
+        result.sort(key=lambda item: (item.absence_date, item.lesson_index or 0, item.uid))
         return result
 
     async def async_get_messages(self) -> list[MessageSummary]:

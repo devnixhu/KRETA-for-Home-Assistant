@@ -48,8 +48,108 @@ async def async_setup_entry(
                 day_offset=1,
                 event_kind="exam",
             ),
+            KretaConditionBinarySensor(entry, runtime_data, "in_lesson", "In lesson", _in_lesson),
+            KretaConditionBinarySensor(entry, runtime_data, "on_break", "On break", _on_break),
+            KretaConditionBinarySensor(
+                entry, runtime_data, "school_finished", "School finished", _school_finished
+            ),
+            KretaConditionBinarySensor(
+                entry,
+                runtime_data,
+                "homework_due_today",
+                "Homework due today",
+                lambda data: any(item.due_date == dt_util.now().date() for item in data.homework),
+            ),
+            KretaConditionBinarySensor(
+                entry,
+                runtime_data,
+                "test_today",
+                "Test today",
+                lambda data: any(item.test_date == dt_util.now().date() for item in data.tests),
+            ),
+            KretaConditionBinarySensor(
+                entry,
+                runtime_data,
+                "test_tomorrow",
+                "Test tomorrow",
+                lambda data: any(
+                    item.test_date == dt_util.now().date() + timedelta(days=1)
+                    for item in data.tests
+                ),
+            ),
+            KretaConditionBinarySensor(
+                entry,
+                runtime_data,
+                "schedule_changed",
+                "Schedule changed",
+                lambda data: bool(data.changes),
+            ),
+            KretaConditionBinarySensor(
+                entry,
+                runtime_data,
+                "substitution_today",
+                "Substitution today",
+                lambda data: any(
+                    item.is_substitution and item.start.date() == dt_util.now().date()
+                    for item in data.events
+                ),
+            ),
+            KretaConditionBinarySensor(
+                entry,
+                runtime_data,
+                "substitution_tomorrow",
+                "Substitution tomorrow",
+                lambda data: any(
+                    item.is_substitution
+                    and item.start.date() == dt_util.now().date() + timedelta(days=1)
+                    for item in data.events
+                ),
+            ),
         ]
     )
+
+
+def _today_lessons(data):
+    today = dt_util.now().date()
+    return [
+        item
+        for item in data.events
+        if item.source != "exam_only" and not item.is_cancelled and item.start.date() == today
+    ]
+
+
+def _in_lesson(data) -> bool:
+    now = dt_util.now()
+    return any(item.start <= now < item.end for item in _today_lessons(data))
+
+
+def _on_break(data) -> bool:
+    now = dt_util.now()
+    lessons = _today_lessons(data)
+    return bool(lessons and lessons[0].start <= now < lessons[-1].end and not _in_lesson(data))
+
+
+def _school_finished(data) -> bool:
+    lessons = _today_lessons(data)
+    return bool(lessons and dt_util.now() >= lessons[-1].end)
+
+
+class KretaConditionBinarySensor(KretaEntity, BinarySensorEntity):
+    def __init__(self, entry, runtime_data, key, name, condition) -> None:
+        super().__init__(entry, runtime_data)
+        self._attr_unique_id = f"{entry.entry_id}_{key}"
+        self._attr_name = name
+        self._attr_translation_key = key
+        self._condition = condition
+        self._attr_entity_registry_enabled_default = key in {
+            "in_lesson",
+            "homework_due_today",
+            "test_today",
+        }
+
+    @property
+    def is_on(self) -> bool | None:
+        return self._condition(self.coordinator.data) if self.coordinator.data else None
 
 
 class KretaDayBinarySensor(KretaEntity, BinarySensorEntity):
@@ -69,6 +169,7 @@ class KretaDayBinarySensor(KretaEntity, BinarySensorEntity):
         super().__init__(entry, runtime_data)
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_name = name
+        self._attr_translation_key = key
         self._day_offset = day_offset
         self._event_kind = event_kind
         self._attr_icon = "mdi:school" if event_kind == "lesson" else "mdi:clipboard-text"
@@ -87,6 +188,10 @@ class KretaDayBinarySensor(KretaEntity, BinarySensorEntity):
     def _event_matches(self, event: MergedCalendarEvent, target_date: date) -> bool:
         """Return whether an event contributes to the sensor state."""
         if self._event_kind == "lesson":
-            return event.source != "exam_only" and event.start.date() == target_date
+            return (
+                event.source != "exam_only"
+                and not event.is_cancelled
+                and event.start.date() == target_date
+            )
 
         return event.exam is not None and event.exam.test_date == target_date

@@ -245,7 +245,7 @@ def test_identity_token_institution_mismatch_is_rejected() -> None:
 
 def test_config_schema_has_no_local_credentials_or_two_factor() -> None:
     keys = {str(key.schema) for key in _build_user_schema().schema}
-    assert keys == {CONF_KLIK_ID, CONF_REFRESH_MINUTES, CONF_LOOKAHEAD_WEEKS}
+    assert keys == {CONF_KLIK_ID, CONF_REFRESH_MINUTES, "future_weeks", "history_weeks"}
     assert "password" not in keys
     assert "user_id" not in keys
     assert "two_factor_code" not in keys

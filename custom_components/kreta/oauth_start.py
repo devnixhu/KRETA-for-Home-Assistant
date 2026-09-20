@@ -43,9 +43,7 @@ def register_oauth_start(
 ) -> str:
     """Register a bounded one-time launcher and return its local URL."""
     ensure_oauth_start_view(hass)
-    starts: dict[str, OAuthStart] = hass.data.setdefault(DOMAIN, {}).setdefault(
-        OAUTH_STARTS, {}
-    )
+    starts: dict[str, OAuthStart] = hass.data.setdefault(DOMAIN, {}).setdefault(OAUTH_STARTS, {})
     while len(starts) >= 100:
         starts.pop(next(iter(starts)))
     handle = secrets.token_urlsafe(24)
@@ -73,9 +71,7 @@ class KretaOAuthStartView(HomeAssistantView):
         if start is None:
             raise web.HTTPNotFound()
         destination = validate_url(start.authorization_url, start.institution)
-        result = await hass.config_entries.flow.async_configure(
-            start.flow_id, {"opened": True}
-        )
+        result = await hass.config_entries.flow.async_configure(start.flow_id, {"opened": True})
         if result["type"] != data_entry_flow.FlowResultType.EXTERNAL_STEP_DONE:
             raise web.HTTPConflict()
         raise web.HTTPFound(location=destination)

@@ -51,9 +51,7 @@ def build_authorization_url(institution: str, attempt: PkceAttempt) -> str:
     return f"{IDP_BASE}/Account/Login?{urlencode({'ReturnUrl': return_url})}"
 
 
-def extract_callback_code(
-    callback_url: str, institution: str, expected_state: str
-) -> str:
+def extract_callback_code(callback_url: str, institution: str, expected_state: str) -> str:
     """Validate a pasted mobile redirect and return its transient code."""
     validated = validate_url(callback_url.strip(), institution)
     parsed = urlsplit(validated)

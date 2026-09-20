@@ -16,6 +16,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
+from .api.cache import KretaCacheSnapshot, KretaDataCache
 from .api.client import KretaApiClient
 from .api.endpoints import MESSAGES_URL, api_url
 from .api.exceptions import (
@@ -35,27 +36,38 @@ from .api.models import (
     MessageSummary,
     SchoolYearMilestone,
     StudentProfile,
+    TimetableChange,
 )
 from .api.storage import KretaBaselineStore, entry_storage_key
 from .const import (
     CONF_ABSENCES,
+    CONF_AUTOMATION_EVENTS,
+    CONF_FUTURE_WEEKS,
     CONF_GRADES,
+    CONF_HISTORY_WEEKS,
     CONF_HOMEWORK,
     CONF_LOOKAHEAD_WEEKS,
     CONF_MESSAGES,
     CONF_REFRESH_HOURS,
     CONF_REFRESH_MINUTES,
+    CONF_SCHOOL_YEAR,
     CONF_TESTS,
     CONF_TIMETABLE,
+    DEFAULT_FUTURE_WEEKS,
+    DEFAULT_HISTORY_WEEKS,
     DEFAULT_LOOKAHEAD_WEEKS,
     DEFAULT_REFRESH_HOURS,
     DEFAULT_REFRESH_MINUTES,
     DOMAIN,
+    EVENT_LESSON_CANCELLED,
     EVENT_NEW_ABSENCE,
     EVENT_NEW_GRADE,
     EVENT_NEW_HOMEWORK,
     EVENT_NEW_MESSAGE,
     EVENT_NEW_TEST,
+    EVENT_ROOM_CHANGED,
+    EVENT_SUBSTITUTION,
+    EVENT_TEACHER_CHANGED,
     EVENT_TIMETABLE_CHANGE,
 )
 
@@ -74,12 +86,63 @@ class KretaCoordinatorData:
     absences: list[Absence]
     messages: list[MessageSummary]
     school_year_calendar: list[SchoolYearMilestone]
+    changes: list[TimetableChange]
     range_start: datetime
     range_end: datetime
     last_success: datetime
     lessons_count: int = 0
     tests_count: int = 0
     new_counts: dict[str, int] = field(default_factory=dict)
+
+    def lessons_between(self, start: datetime, end: datetime) -> list[MergedCalendarEvent]:
+        """Return lesson events overlapping a bounded interval."""
+        return [
+            event
+            for event in self.events
+            if event.source != "exam_only" and event.end > start and event.start < end
+        ]
+
+    def lessons_for_date(self, target: date) -> list[MergedCalendarEvent]:
+        """Return all lessons for one local date."""
+        return [
+            event
+            for event in self.events
+            if event.source != "exam_only" and event.start.date() == target
+        ]
+
+    def lessons_for_week(self, target: date) -> dict[str, list[MergedCalendarEvent]]:
+        """Return Monday through Sunday lesson groups."""
+        monday = target - timedelta(days=target.weekday())
+        return {
+            (monday + timedelta(days=offset)).isoformat(): self.lessons_for_date(
+                monday + timedelta(days=offset)
+            )
+            for offset in range(7)
+        }
+
+    def current_lesson(self, now: datetime) -> MergedCalendarEvent | None:
+        """Return the active lesson at a local time."""
+        return next(
+            (
+                event
+                for event in self.events
+                if event.source != "exam_only"
+                and not event.is_cancelled
+                and event.start <= now < event.end
+            ),
+            None,
+        )
+
+    def next_lesson(self, now: datetime) -> MergedCalendarEvent | None:
+        """Return the next non-cancelled lesson."""
+        return next(
+            (
+                event
+                for event in self.events
+                if event.source != "exam_only" and not event.is_cancelled and event.start > now
+            ),
+            None,
+        )
 
 
 def _start_of_current_week() -> date:
@@ -95,6 +158,8 @@ def _record_id(kind: str, record: object) -> str:
     uid = getattr(record, "uid", "")
     if uid:
         return f"{kind}:{uid}"
+    if isinstance(record, MergedCalendarEvent):
+        return _stable((kind, record.start, record.lesson_index, record.subject_name))
     if isinstance(record, Grade):
         return _stable((kind, record.grade_date, record.subject_name, record.value, record.topic))
     if isinstance(record, HomeworkItem):
@@ -110,6 +175,99 @@ def _record_id(kind: str, record: object) -> str:
     if isinstance(record, MessageSummary):
         return _stable((kind, record.received_at, record.sender, record.subject))
     raise TypeError(f"Unsupported baseline record: {type(record).__name__}")
+
+
+def _record_date(record: object) -> date:
+    """Return the primary local date for a normalized record."""
+    if isinstance(record, MergedCalendarEvent):
+        return record.start.date()
+    if isinstance(record, Grade):
+        return record.grade_date
+    if isinstance(record, HomeworkItem):
+        return record.due_date
+    if isinstance(record, AnnouncedTest):
+        return record.test_date
+    if isinstance(record, Absence):
+        return record.absence_date
+    if isinstance(record, MessageSummary):
+        return record.received_at.date()
+    raise TypeError(f"Unsupported dated record: {type(record).__name__}")
+
+
+def _merge_window(
+    category: str,
+    existing: list[Any],
+    fresh: list[Any],
+    refreshed_start: date,
+    refreshed_end: date,
+    retained_start: date,
+    retained_end: date,
+) -> list[Any]:
+    """Replace one fetched window while retaining cached records outside it."""
+    combined = [
+        item
+        for item in existing
+        if retained_start <= _record_date(item) <= retained_end
+        and not refreshed_start <= _record_date(item) <= refreshed_end
+    ]
+    combined.extend(fresh)
+    deduplicated = {_record_id(category, item): item for item in combined}
+    return sorted(
+        deduplicated.values(), key=lambda item: (_record_date(item), _record_id(category, item))
+    )
+
+
+def detect_timetable_changes(
+    previous: list[MergedCalendarEvent], current: list[MergedCalendarEvent]
+) -> list[TimetableChange]:
+    """Compare only matching stable UIDs and never infer disappearance as cancellation."""
+    old_by_uid = {item.uid: item for item in previous if item.uid}
+    changes: list[TimetableChange] = []
+    for lesson in current:
+        old = old_by_uid.get(lesson.uid)
+        if old is None:
+            continue
+        candidates = (
+            (
+                "time_changed",
+                old.start.isoformat(),
+                lesson.start.isoformat(),
+                old.start != lesson.start or old.end != lesson.end,
+            ),
+            ("room_changed", old.location, lesson.location, old.location != lesson.location),
+            (
+                "teacher_changed",
+                old.teacher_name,
+                lesson.teacher_name,
+                old.teacher_name != lesson.teacher_name,
+            ),
+            (
+                "substitution",
+                old.substitute_teacher_name,
+                lesson.substitute_teacher_name,
+                not old.is_substitution and lesson.is_substitution,
+            ),
+            (
+                "lesson_cancelled",
+                old.state,
+                lesson.state,
+                not old.is_cancelled and lesson.is_cancelled,
+            ),
+        )
+        for change_type, old_value, new_value, changed in candidates:
+            if changed:
+                changes.append(
+                    TimetableChange(
+                        change_type=change_type,
+                        lesson_uid=lesson.uid,
+                        subject_name=lesson.subject_name,
+                        lesson_index=lesson.lesson_index,
+                        start=lesson.start,
+                        old_value=old_value,
+                        new_value=new_value,
+                    )
+                )
+    return changes
 
 
 def _safe_endpoint_label(endpoint: str) -> str:
@@ -173,6 +331,15 @@ def merge_lessons_and_tests(
                 subject_name=lesson.subject_name,
                 exam=match,
                 source="lesson_with_exam" if match else "lesson",
+                teacher_name=lesson.teacher_name,
+                substitute_teacher_name=lesson.substitute_teacher_name,
+                topic=lesson.topic,
+                lesson_type=lesson.lesson_type,
+                state=lesson.state,
+                annual_index=lesson.annual_index,
+                is_cancelled=lesson.is_cancelled,
+                is_substitution=lesson.is_substitution,
+                is_digital=lesson.is_digital,
             )
         )
     for index, test in enumerate(tests):
@@ -220,11 +387,12 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 else min(60, legacy_hours * 60)
             )
         self._baseline = KretaBaselineStore(hass, entry_storage_key(dict(config_entry.data)))
+        self._cache = KretaDataCache(hass, entry_storage_key(dict(config_entry.data)))
         super().__init__(
             hass,
             logger=_LOGGER,
             name=f"{DOMAIN}_{config_entry.entry_id}",
-            update_interval=timedelta(minutes=minutes),
+            update_interval=timedelta(minutes=minutes) if minutes > 0 else None,
             config_entry=config_entry,
         )
 
@@ -300,7 +468,9 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 payload.update(
                     subject=record.subject_name,
                     grade=record.value,
+                    numeric_grade=record.numeric_value,
                     type=record.grade_type,
+                    topic=record.topic,
                     date=record.grade_date.isoformat(),
                 )
             elif isinstance(record, HomeworkItem):
@@ -325,63 +495,61 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             count += 1
         return count
 
-    async def _emit_timetable_changes(self, events: list[MergedCalendarEvent]) -> int:
-        signatures = {
-            _stable(
-                (
-                    event.start.date(),
-                    event.lesson_index,
-                    event.start.time(),
-                    event.end.time(),
-                    event.subject_name,
-                    event.location,
-                )
-            )
-            for event in events
-            if event.source != "exam_only"
+    async def _emit_timetable_changes(self, changes: list[TimetableChange]) -> int:
+        """Emit reliable field-level timetable changes."""
+        event_types = {
+            "room_changed": EVENT_ROOM_CHANGED,
+            "teacher_changed": EVENT_TEACHER_CHANGED,
+            "substitution": EVENT_SUBSTITUTION,
+            "lesson_cancelled": EVENT_LESSON_CANCELLED,
         }
-        had_baseline, new_hashes = await self._baseline.async_update("timetable", signatures)
-        if not had_baseline:
-            return 0
-        count = 0
-        for event in events:
-            signature = _stable(
-                (
-                    event.start.date(),
-                    event.lesson_index,
-                    event.start.time(),
-                    event.end.time(),
-                    event.subject_name,
-                    event.location,
-                )
-            )
-            if hashlib.sha256(signature.encode()).hexdigest() not in new_hashes:
-                continue
-            self.hass.bus.async_fire(
-                EVENT_TIMETABLE_CHANGE,
-                {
-                    "entry_id": self.config_entry.entry_id,
-                    "change_type": "new_or_changed_lesson",
-                    "subject": event.subject_name,
-                    "room": event.location,
-                    "start": event.start.isoformat(),
-                },
-            )
-            count += 1
-        return count
+        for change in changes:
+            payload = {
+                "entry_id": self.config_entry.entry_id,
+                "change_type": change.change_type,
+                "subject": change.subject_name,
+                "lesson_index": change.lesson_index,
+                "start": change.start.isoformat(),
+                "old_value": change.old_value,
+                "new_value": change.new_value,
+            }
+            self.hass.bus.async_fire(EVENT_TIMETABLE_CHANGE, payload)
+            if event_type := event_types.get(change.change_type):
+                self.hass.bus.async_fire(event_type, payload)
+        return len(changes)
 
     async def _async_update_data(self) -> KretaCoordinatorData:
-        lookahead = self.config_entry.options.get(
+        legacy_lookahead = self.config_entry.options.get(
             CONF_LOOKAHEAD_WEEKS,
             self.config_entry.data.get(CONF_LOOKAHEAD_WEEKS, DEFAULT_LOOKAHEAD_WEEKS),
         )
+        future_weeks = int(
+            self.config_entry.options.get(CONF_FUTURE_WEEKS, legacy_lookahead)
+            or DEFAULT_FUTURE_WEEKS
+        )
+        history_weeks = int(
+            self.config_entry.options.get(CONF_HISTORY_WEEKS, DEFAULT_HISTORY_WEEKS)
+        )
+        today = dt_util.now().date()
         week_start = _start_of_current_week()
-        week_end = week_start + timedelta(weeks=lookahead) - timedelta(days=1)
-        range_start = datetime.combine(week_start, time.min, tzinfo=dt_util.DEFAULT_TIME_ZONE)
+        week_end = week_start + timedelta(weeks=future_weeks) - timedelta(days=1)
+        history_start = today - timedelta(weeks=history_weeks)
+        range_start = datetime.combine(history_start, time.min, tzinfo=dt_util.DEFAULT_TIME_ZONE)
         range_end = datetime.combine(week_end, time.max, tzinfo=dt_util.DEFAULT_TIME_ZONE)
-        history_start = week_start - timedelta(weeks=lookahead)
         institution = self.config_entry.data["klik_id"]
         self.degraded_operations = set()
+        cache_store = getattr(self, "_cache", None)
+        cache = await cache_store.async_load() if cache_store else KretaCacheSnapshot()
+        lessons_fetch_start = (
+            history_start if not cache.lessons else max(history_start, today - timedelta(days=7))
+        )
+        history_fetch_start = (
+            history_start if not cache.grades else max(history_start, today - timedelta(days=14))
+        )
+        school_year_due = (
+            cache.school_year_updated_at is None
+            or dt_util.utcnow() - cache.school_year_updated_at >= timedelta(hours=24)
+        )
         try:
             profile = await self._async_api_operation(
                 "student_profile",
@@ -389,57 +557,57 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 api_url(institution, "Sajat/TanuloAdatlap"),
                 self.client.async_get_student_profile(),
             )
-            lessons = (
+            fresh_lessons = (
                 await self._async_optional_api_operation(
                     "lessons",
                     "GET",
                     api_url(institution, "Sajat/OrarendElemek"),
-                    self.client.async_get_lessons(week_start, week_end),
+                    self.client.async_get_lessons(lessons_fetch_start, week_end),
                 )
                 if self._enabled(CONF_TIMETABLE)
                 else []
             )
-            tests = (
+            fresh_tests = (
                 await self._async_optional_api_operation(
                     "announced_tests",
                     "GET",
                     api_url(institution, "Sajat/BejelentettSzamonkeresek"),
-                    self.client.async_get_announced_tests(week_start, week_end),
+                    self.client.async_get_announced_tests(today, week_end),
                 )
                 if self._enabled(CONF_TESTS)
                 else []
             )
-            grades = (
+            fresh_grades = (
                 await self._async_optional_api_operation(
                     "grades",
                     "GET",
                     api_url(institution, "Sajat/Ertekelesek"),
-                    self.client.async_get_grades(history_start, week_end),
+                    self.client.async_get_grades(history_fetch_start, today),
                 )
                 if self._enabled(CONF_GRADES)
                 else []
             )
-            homework = (
+            fresh_homework = (
                 await self._async_optional_api_operation(
                     "homework",
                     "GET",
                     api_url(institution, "Sajat/HaziFeladatok"),
-                    self.client.async_get_homework(week_start, week_end),
+                    self.client.async_get_homework(today, week_end),
                 )
                 if self._enabled(CONF_HOMEWORK)
                 else []
             )
-            absences = (
+            fresh_absences = (
                 await self._async_optional_api_operation(
                     "absences",
                     "GET",
                     api_url(institution, "Sajat/Mulasztasok"),
-                    self.client.async_get_absences(history_start, week_end),
+                    self.client.async_get_absences(history_fetch_start, today),
                 )
                 if self._enabled(CONF_ABSENCES)
                 else []
             )
-            messages = (
+            fresh_messages = (
                 await self._async_optional_api_operation(
                     "messages",
                     "GET",
@@ -449,15 +617,15 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 if self._enabled(CONF_MESSAGES)
                 else []
             )
-            school_year = (
+            fresh_school_year = (
                 await self._async_optional_api_operation(
                     "school_year_calendar",
                     "GET",
                     api_url(institution, "Sajat/Intezmenyek/TanevRendjeElemek"),
                     self.client.async_get_school_year_calendar(),
                 )
-                if self._enabled(CONF_TIMETABLE)
-                else []
+                if self._enabled(CONF_SCHOOL_YEAR) and school_year_due
+                else cache.school_year
             )
         except InvalidAuthError as err:
             self.last_error_message = "authentication_required"
@@ -472,15 +640,133 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             self.last_error_time = dt_util.utcnow()
             raise UpdateFailed("KRÉTA data update failed") from err
 
+        lessons = (
+            (
+                cache.lessons
+                if "lessons" in self.degraded_operations
+                else _merge_window(
+                    "lessons",
+                    cache.lessons,
+                    fresh_lessons,
+                    lessons_fetch_start,
+                    week_end,
+                    history_start,
+                    week_end,
+                )
+            )
+            if self._enabled(CONF_SCHOOL_YEAR)
+            else []
+        )
+        tests = (
+            (
+                cache.tests
+                if "announced_tests" in self.degraded_operations
+                else _merge_window(
+                    "tests", cache.tests, fresh_tests, today, week_end, history_start, week_end
+                )
+            )
+            if self._enabled(CONF_TESTS)
+            else []
+        )
+        grades = (
+            (
+                cache.grades
+                if "grades" in self.degraded_operations
+                else _merge_window(
+                    "grades",
+                    cache.grades,
+                    fresh_grades,
+                    history_fetch_start,
+                    today,
+                    history_start,
+                    today,
+                )
+            )
+            if self._enabled(CONF_GRADES)
+            else []
+        )
+        homework = (
+            (
+                cache.homework
+                if "homework" in self.degraded_operations
+                else _merge_window(
+                    "homework",
+                    cache.homework,
+                    fresh_homework,
+                    today,
+                    week_end,
+                    history_start,
+                    week_end,
+                )
+            )
+            if self._enabled(CONF_HOMEWORK)
+            else []
+        )
+        absences = (
+            (
+                cache.absences
+                if "absences" in self.degraded_operations
+                else _merge_window(
+                    "absences",
+                    cache.absences,
+                    fresh_absences,
+                    history_fetch_start,
+                    today,
+                    history_start,
+                    today,
+                )
+            )
+            if self._enabled(CONF_ABSENCES)
+            else []
+        )
+        messages = (
+            (cache.messages if "messages" in self.degraded_operations else fresh_messages)
+            if self._enabled(CONF_MESSAGES)
+            else []
+        )
+        school_year = (
+            (
+                cache.school_year
+                if "school_year_calendar" in self.degraded_operations
+                else fresh_school_year
+            )
+            if self._enabled(CONF_TIMETABLE)
+            else []
+        )
+        current_fresh_lessons = fresh_lessons if "lessons" not in self.degraded_operations else []
+        changes = detect_timetable_changes(cache.lessons, current_fresh_lessons)
         events = merge_lessons_and_tests(lessons, tests)
-        new_counts = {
-            "grades": await self._emit_new("grades", grades, EVENT_NEW_GRADE),
-            "homework": await self._emit_new("homework", homework, EVENT_NEW_HOMEWORK),
-            "tests": await self._emit_new("tests", tests, EVENT_NEW_TEST),
-            "absences": await self._emit_new("absences", absences, EVENT_NEW_ABSENCE),
-            "messages": await self._emit_new("messages", messages, EVENT_NEW_MESSAGE),
-            "timetable": await self._emit_timetable_changes(events),
-        }
+        if self.config_entry.options.get(CONF_AUTOMATION_EVENTS, True):
+            new_counts = {
+                "grades": await self._emit_new("grades", grades, EVENT_NEW_GRADE),
+                "homework": await self._emit_new("homework", homework, EVENT_NEW_HOMEWORK),
+                "tests": await self._emit_new("tests", tests, EVENT_NEW_TEST),
+                "absences": await self._emit_new("absences", absences, EVENT_NEW_ABSENCE),
+                "messages": await self._emit_new("messages", messages, EVENT_NEW_MESSAGE),
+                "timetable": await self._emit_timetable_changes(changes),
+            }
+        else:
+            new_counts = {
+                key: 0
+                for key in ("grades", "homework", "tests", "absences", "messages", "timetable")
+            }
+        new_counts["degraded"] = len(self.degraded_operations)
+        snapshot = KretaCacheSnapshot(
+            lessons=lessons,
+            grades=grades,
+            homework=homework,
+            tests=tests,
+            absences=absences,
+            messages=messages,
+            school_year=school_year,
+            school_year_updated_at=(
+                dt_util.utcnow()
+                if school_year_due and "school_year_calendar" not in self.degraded_operations
+                else cache.school_year_updated_at
+            ),
+        )
+        if cache_store:
+            await cache_store.async_save(snapshot)
         if self.degraded_operations:
             self.last_error_message = "partial_data"
             self.last_error_time = dt_util.utcnow()
@@ -496,6 +782,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             absences=absences,
             messages=messages,
             school_year_calendar=school_year,
+            changes=changes,
             range_start=range_start,
             range_end=range_end,
             last_success=dt_util.utcnow(),

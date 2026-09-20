@@ -27,21 +27,29 @@ from .api.storage import KretaTokenStore, MemoryTokenStore, entry_storage_key
 from .const import (
     CONF_ABSENCES,
     CONF_ACCOUNT_KEY,
+    CONF_AUTOMATION_EVENTS,
+    CONF_FUTURE_WEEKS,
     CONF_GRADES,
+    CONF_HISTORY_WEEKS,
     CONF_HOMEWORK,
     CONF_KLIK_ID,
+    CONF_LESSON_EVENTS,
     CONF_LOOKAHEAD_WEEKS,
     CONF_MESSAGES,
     CONF_OAUTH_REDIRECT_URL,
     CONF_REFRESH_MINUTES,
+    CONF_SCHOOL_YEAR,
     CONF_TESTS,
     CONF_TIMETABLE,
+    DEFAULT_FUTURE_WEEKS,
+    DEFAULT_HISTORY_WEEKS,
     DEFAULT_LOOKAHEAD_WEEKS,
     DEFAULT_REFRESH_MINUTES,
     DOMAIN,
+    MAX_HISTORY_WEEKS,
     MAX_LOOKAHEAD_WEEKS,
     MAX_REFRESH_MINUTES,
-    MIN_LOOKAHEAD_WEEKS,
+    MIN_HISTORY_WEEKS,
     MIN_REFRESH_MINUTES,
 )
 from .oauth_start import register_oauth_start
@@ -62,11 +70,18 @@ def _build_user_schema(data: Mapping[str, Any] | None = None) -> vol.Schema:
                 vol.Coerce(int), vol.Range(min=MIN_REFRESH_MINUTES, max=MAX_REFRESH_MINUTES)
             ),
             vol.Required(
-                CONF_LOOKAHEAD_WEEKS,
-                default=values.get(CONF_LOOKAHEAD_WEEKS, DEFAULT_LOOKAHEAD_WEEKS),
+                CONF_FUTURE_WEEKS,
+                default=values.get(
+                    CONF_FUTURE_WEEKS,
+                    values.get(CONF_LOOKAHEAD_WEEKS, DEFAULT_FUTURE_WEEKS),
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_LOOKAHEAD_WEEKS)),
+            vol.Required(
+                CONF_HISTORY_WEEKS,
+                default=values.get(CONF_HISTORY_WEEKS, DEFAULT_HISTORY_WEEKS),
             ): vol.All(
                 vol.Coerce(int),
-                vol.Range(min=MIN_LOOKAHEAD_WEEKS, max=MAX_LOOKAHEAD_WEEKS),
+                vol.Range(min=MIN_HISTORY_WEEKS, max=MAX_HISTORY_WEEKS),
             ),
         }
     )
@@ -92,21 +107,33 @@ def _build_options_schema(config_entry: config_entries.ConfigEntry) -> vol.Schem
                 vol.Coerce(int), vol.Range(min=MIN_REFRESH_MINUTES, max=MAX_REFRESH_MINUTES)
             ),
             vol.Required(
-                CONF_LOOKAHEAD_WEEKS,
+                CONF_FUTURE_WEEKS,
                 default=options.get(
-                    CONF_LOOKAHEAD_WEEKS,
-                    config_entry.data.get(CONF_LOOKAHEAD_WEEKS, DEFAULT_LOOKAHEAD_WEEKS),
+                    CONF_FUTURE_WEEKS,
+                    config_entry.data.get(
+                        CONF_FUTURE_WEEKS,
+                        config_entry.data.get(CONF_LOOKAHEAD_WEEKS, DEFAULT_FUTURE_WEEKS),
+                    ),
                 ),
-            ): vol.All(
-                vol.Coerce(int),
-                vol.Range(min=MIN_LOOKAHEAD_WEEKS, max=MAX_LOOKAHEAD_WEEKS),
-            ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=1, max=MAX_LOOKAHEAD_WEEKS)),
+            vol.Required(
+                CONF_HISTORY_WEEKS,
+                default=options.get(
+                    CONF_HISTORY_WEEKS,
+                    config_entry.data.get(CONF_HISTORY_WEEKS, DEFAULT_HISTORY_WEEKS),
+                ),
+            ): vol.All(vol.Coerce(int), vol.Range(min=MIN_HISTORY_WEEKS, max=MAX_HISTORY_WEEKS)),
             vol.Required(CONF_TIMETABLE, default=options.get(CONF_TIMETABLE, True)): bool,
             vol.Required(CONF_GRADES, default=options.get(CONF_GRADES, True)): bool,
             vol.Required(CONF_HOMEWORK, default=options.get(CONF_HOMEWORK, True)): bool,
             vol.Required(CONF_TESTS, default=options.get(CONF_TESTS, True)): bool,
             vol.Required(CONF_MESSAGES, default=options.get(CONF_MESSAGES, True)): bool,
             vol.Required(CONF_ABSENCES, default=options.get(CONF_ABSENCES, True)): bool,
+            vol.Required(CONF_SCHOOL_YEAR, default=options.get(CONF_SCHOOL_YEAR, True)): bool,
+            vol.Required(
+                CONF_AUTOMATION_EVENTS, default=options.get(CONF_AUTOMATION_EVENTS, True)
+            ): bool,
+            vol.Required(CONF_LESSON_EVENTS, default=options.get(CONF_LESSON_EVENTS, True)): bool,
         }
     )
 
@@ -114,7 +141,7 @@ def _build_options_schema(config_entry: config_entries.ConfigEntry) -> vol.Schem
 class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle browser-based KRÉTA OAuth setup and reauthentication."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         """Initialize ephemeral authorization state."""
@@ -127,9 +154,7 @@ class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Log only a privacy-safe OAuth stage marker."""
         _LOGGER.warning("KRÉTA OAuth stage failed: %s", stage)
 
-    def _begin_oauth(
-        self, data: Mapping[str, Any]
-    ) -> config_entries.ConfigFlowResult:
+    def _begin_oauth(self, data: Mapping[str, Any]) -> config_entries.ConfigFlowResult:
         """Create a new in-memory PKCE attempt and show the callback form."""
         institution = str(data[CONF_KLIK_ID]).strip().lower()
         self._pending_data = dict(data)
@@ -182,6 +207,8 @@ class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_LOOKAHEAD_WEEKS: self._pending_data.get(
                 CONF_LOOKAHEAD_WEEKS, DEFAULT_LOOKAHEAD_WEEKS
             ),
+            CONF_FUTURE_WEEKS: self._pending_data.get(CONF_FUTURE_WEEKS, DEFAULT_FUTURE_WEEKS),
+            CONF_HISTORY_WEEKS: self._pending_data.get(CONF_HISTORY_WEEKS, DEFAULT_HISTORY_WEEKS),
         }
         self._attempt = None
         self._authorization_url = None

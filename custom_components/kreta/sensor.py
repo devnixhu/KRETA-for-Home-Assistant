@@ -15,6 +15,7 @@ from . import KretaRuntimeData
 from .api.models import MergedCalendarEvent
 from .const import DOMAIN
 from .entity import KretaEntity
+from .queries import grades_payload
 
 
 async def async_setup_entry(
@@ -40,6 +41,15 @@ async def async_setup_entry(
                 lambda data: _lessons_on(data.events, 1),
             ),
             KretaLatestGradeSensor(entry, runtime),
+            KretaPreviousGradeSensor(entry, runtime),
+            KretaGradeAverageSensor(entry, runtime),
+            KretaCountSensor(
+                entry, runtime, "grades_count", "Grades count", lambda data: len(data.grades)
+            ),
+            KretaCountSensor(entry, runtime, "grades_this_week", "Grades this week", _grades_week),
+            KretaCountSensor(
+                entry, runtime, "grades_this_month", "Grades this month", _grades_month
+            ),
             KretaCountSensor(
                 entry,
                 runtime,
@@ -56,6 +66,15 @@ async def async_setup_entry(
             ),
             KretaNextTestSensor(entry, runtime),
             KretaCountSensor(
+                entry, runtime, "tests_today", "Tests today", lambda data: _tests_on(data, 0)
+            ),
+            KretaCountSensor(
+                entry, runtime, "tests_tomorrow", "Tests tomorrow", lambda data: _tests_on(data, 1)
+            ),
+            KretaCountSensor(
+                entry, runtime, "upcoming_tests", "Upcoming tests", lambda data: len(data.tests)
+            ),
+            KretaCountSensor(
                 entry, runtime, "tests_this_week", "Tests this week", _tests_this_week
             ),
             KretaCountSensor(
@@ -66,6 +85,9 @@ async def async_setup_entry(
                 lambda data: sum(not item.is_read for item in data.messages),
             ),
             KretaLatestMessageSensor(entry, runtime),
+            KretaCountSensor(
+                entry, runtime, "messages_this_week", "Messages this week", _messages_week
+            ),
             KretaCountSensor(
                 entry,
                 runtime,
@@ -80,9 +102,30 @@ async def async_setup_entry(
                 "Late arrivals",
                 lambda data: sum(item.minutes is not None for item in data.absences),
             ),
+            KretaCountSensor(
+                entry,
+                runtime,
+                "total_late_minutes",
+                "Total late minutes",
+                lambda data: sum(item.minutes or 0 for item in data.absences),
+            ),
+            KretaCountSensor(
+                entry, runtime, "absences_this_month", "Absences this month", _absences_month
+            ),
+            KretaAbsenceStatusSensor(
+                entry, runtime, "justified_absences", "Justified absences", "igazolt"
+            ),
+            KretaAbsenceStatusSensor(
+                entry, runtime, "unjustified_absences", "Unjustified absences", "igazolatlan"
+            ),
+            KretaAbsenceStatusSensor(
+                entry, runtime, "pending_absences", "Pending absences", "pending"
+            ),
             KretaSchoolStatusSensor(entry, runtime),
             KretaBriefSensor(entry, runtime, 0),
             KretaBriefSensor(entry, runtime, 1),
+            KretaWeekSummarySensor(entry, runtime),
+            KretaNextMilestoneSensor(entry, runtime),
             KretaLastRefreshSensor(entry, runtime),
             KretaUpdateStatusSensor(entry, runtime),
         ]
@@ -114,6 +157,38 @@ def _tests_this_week(data: Any) -> int:
     return sum(today <= item.test_date <= end for item in data.tests)
 
 
+def _tests_on(data: Any, offset: int) -> int:
+    target = dt_util.now().date() + timedelta(days=offset)
+    return sum(item.test_date == target for item in data.tests)
+
+
+def _grades_week(data: Any) -> int:
+    today = dt_util.now().date()
+    start = today - timedelta(days=today.weekday())
+    return sum(start <= item.grade_date <= today for item in data.grades)
+
+
+def _grades_month(data: Any) -> int:
+    today = dt_util.now().date()
+    return sum(
+        item.grade_date.year == today.year and item.grade_date.month == today.month
+        for item in data.grades
+    )
+
+
+def _messages_week(data: Any) -> int:
+    start = dt_util.now() - timedelta(days=7)
+    return sum(item.received_at >= start for item in data.messages)
+
+
+def _absences_month(data: Any) -> int:
+    today = dt_util.now().date()
+    return sum(
+        item.absence_date.year == today.year and item.absence_date.month == today.month
+        for item in data.absences
+    )
+
+
 class KretaCountSensor(KretaEntity, SensorEntity):
     _attr_native_unit_of_measurement = "items"
 
@@ -128,6 +203,7 @@ class KretaCountSensor(KretaEntity, SensorEntity):
         super().__init__(entry, runtime)
         self._attr_unique_id = f"{entry.entry_id}_{key}"
         self._attr_name = name
+        self._attr_translation_key = key
         self._value_fn = value_fn
 
     @property
@@ -169,12 +245,37 @@ class KretaLessonSensor(KretaEntity, SensorEntity):
             "start": event.start.isoformat(),
             "end": event.end.isoformat(),
             "room": event.location,
-            "minutes_until": max(
+            "teacher": event.teacher_name,
+            "lesson_index": event.lesson_index,
+            "topic": event.topic,
+            "progress_percent": max(
                 0,
-                int(
-                    ((event.end if event.start <= now else event.start) - now).total_seconds() // 60
+                min(
+                    100,
+                    round(
+                        (now - event.start).total_seconds()
+                        / max(1, (event.end - event.start).total_seconds())
+                        * 100
+                    ),
                 ),
-            ),
+            )
+            if event.start <= now < event.end
+            else 0,
+            "minutes_elapsed": max(0, int((now - event.start).total_seconds() // 60))
+            if event.start <= now
+            else 0,
+            "minutes_remaining": max(0, int((event.end - now).total_seconds() // 60))
+            if event.start <= now
+            else max(0, int((event.start - now).total_seconds() // 60)),
+            "is_substitution": event.is_substitution,
+            "substitute_teacher": event.substitute_teacher_name,
+            "is_cancelled": event.is_cancelled,
+            "next_lesson": self.coordinator.data.next_lesson(now).subject_name
+            if self.coordinator.data and self.coordinator.data.next_lesson(now)
+            else None,
+            "next_lesson_start": self.coordinator.data.next_lesson(now).start.isoformat()
+            if self.coordinator.data and self.coordinator.data.next_lesson(now)
+            else None,
         }
 
 
@@ -203,8 +304,62 @@ class KretaLatestGradeSensor(KretaEntity, SensorEntity):
             "subject": grade.subject_name,
             "type": grade.grade_type,
             "date": grade.grade_date.isoformat(),
-            "weight": None,
+            "numeric_grade": grade.numeric_value,
+            "weight": grade.weight_percentage,
+            "topic": grade.topic,
+            "teacher": grade.teacher_name,
         }
+
+
+class KretaPreviousGradeSensor(KretaLatestGradeSensor):
+    _attr_name = "Previous grade"
+
+    def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
+        super().__init__(entry, runtime)
+        self._attr_unique_id = f"{entry.entry_id}_previous_grade"
+        self._attr_entity_registry_enabled_default = False
+
+    @property
+    def native_value(self) -> str | None:
+        return (
+            self.coordinator.data.grades[-2].value
+            if self.coordinator.data and len(self.coordinator.data.grades) > 1
+            else None
+        )
+
+
+class KretaGradeAverageSensor(KretaEntity, SensorEntity):
+    _attr_name = "Average"
+    _attr_icon = "mdi:chart-line"
+
+    def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
+        super().__init__(entry, runtime)
+        self._attr_unique_id = f"{entry.entry_id}_grade_average"
+
+    @property
+    def native_value(self) -> float | None:
+        return (
+            grades_payload(self.coordinator.data, 1)["average"] if self.coordinator.data else None
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
+        result = grades_payload(self.coordinator.data, 1)
+        return {"weighted": result["weighted"], "subject_averages": result["subject_averages"]}
+
+
+class KretaAbsenceStatusSensor(KretaCountSensor):
+    def __init__(self, entry, runtime, key, name, status):
+        super().__init__(
+            entry,
+            runtime,
+            key,
+            name,
+            lambda data: sum(status in item.status.casefold() for item in data.absences),
+        )
+        self._attr_entity_registry_enabled_default = False
 
 
 class KretaNextTestSensor(KretaEntity, SensorEntity):
@@ -324,7 +479,84 @@ class KretaBriefSensor(KretaEntity, SensorEntity):
             "tests": sum(item.test_date == target for item in self.coordinator.data.tests),
             "homework_due": sum(item.due_date == target for item in self.coordinator.data.homework),
             "schedule_changes": self.coordinator.data.new_counts.get("timetable", 0),
+            "substitutions": sum(item.is_substitution for item in lessons),
+            "cancelled_lessons": sum(item.is_cancelled for item in lessons),
+            "start_time": lessons[0].start.isoformat() if lessons else None,
+            "end_time": lessons[-1].end.isoformat() if lessons else None,
         }
+
+
+class KretaWeekSummarySensor(KretaEntity, SensorEntity):
+    _attr_name = "Week summary"
+    _attr_icon = "mdi:calendar-week"
+
+    def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
+        super().__init__(entry, runtime)
+        self._attr_unique_id = f"{entry.entry_id}_week_summary"
+
+    @property
+    def native_value(self) -> int | None:
+        return len(self._lessons()) if self.coordinator.data else None
+
+    def _lessons(self) -> list[MergedCalendarEvent]:
+        today = dt_util.now().date()
+        monday = today - timedelta(days=today.weekday())
+        sunday = monday + timedelta(days=6)
+        return [
+            item
+            for item in _lesson_events(self.coordinator.data.events)
+            if monday <= item.start.date() <= sunday
+        ]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
+        lessons = self._lessons()
+        days = sorted({item.start.date() for item in lessons})
+        return {
+            "school_days": len(days),
+            "lesson_count": len(lessons),
+            "test_count": _tests_this_week(self.coordinator.data),
+            "substitutions": sum(item.is_substitution for item in lessons),
+            "first_school_day": days[0].isoformat() if days else None,
+            "last_school_day": days[-1].isoformat() if days else None,
+        }
+
+
+class KretaNextMilestoneSensor(KretaEntity, SensorEntity):
+    _attr_name = "Next school-year event"
+    _attr_device_class = SensorDeviceClass.DATE
+    _attr_icon = "mdi:calendar-star"
+
+    def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
+        super().__init__(entry, runtime)
+        self._attr_unique_id = f"{entry.entry_id}_next_school_year_event"
+
+    def _milestone(self):
+        today = dt_util.now().date()
+        return (
+            next(
+                (
+                    item
+                    for item in self.coordinator.data.school_year_calendar
+                    if item.event_date >= today
+                ),
+                None,
+            )
+            if self.coordinator.data
+            else None
+        )
+
+    @property
+    def native_value(self) -> date | None:
+        item = self._milestone()
+        return item.event_date if item else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        item = self._milestone()
+        return {"type": item.day_type, "description": item.description} if item else {}
 
 
 class KretaLastRefreshSensor(KretaEntity, SensorEntity):
