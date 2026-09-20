@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -350,6 +349,7 @@ class KretaUpdateStatusSensor(KretaEntity, SensorEntity):
         "authentication_required",
         "temporarily_unavailable",
         "rate_limited",
+        "partial_data",
         "error",
     ]
     _attr_entity_category = EntityCategory.DIAGNOSTIC
@@ -360,6 +360,6 @@ class KretaUpdateStatusSensor(KretaEntity, SensorEntity):
 
     @property
     def native_value(self) -> str:
-        if self.coordinator.last_update_success:
-            return "ok"
-        return self.coordinator.last_error_message or "error"
+        if self.coordinator.last_error_message:
+            return self.coordinator.last_error_message
+        return "ok" if self.coordinator.last_update_success else "error"

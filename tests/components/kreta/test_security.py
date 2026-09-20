@@ -28,7 +28,7 @@ from custom_components.kreta.api.exceptions import (
     OAuthCodeMissingError,
     OAuthStateMismatchError,
 )
-from custom_components.kreta.api.models import OAuthTokens
+from custom_components.kreta.api.models import OAuthTokens, StudentProfile
 from custom_components.kreta.api.network_policy import (
     normalize_institution,
     validate_redirect,
@@ -227,9 +227,7 @@ def test_invalid_callback_is_rejected(url: str) -> None:
 
 
 def test_account_key_uses_opaque_identity() -> None:
-    token = _jwt(
-        {"kreta:institute_code": "school01", "kreta:institute_user_id": "Árvíztűrő"}
-    )
+    token = _jwt({"kreta:institute_code": "school01", "kreta:institute_user_id": "Árvíztűrő"})
     key = account_key_from_id_token(token, "school01")
     assert len(key) == 64
     assert "Árvíz" not in key
@@ -409,9 +407,7 @@ async def test_reauthentication_launches_new_oauth_attempt(hass, monkeypatch) ->
     flow = KretaConfigFlow()
     flow.hass = hass
     flow._flow_id = "flow-reauth"
-    entry = SimpleNamespace(
-        data={CONF_KLIK_ID: "school01", CONF_ACCOUNT_KEY: "a" * 64}
-    )
+    entry = SimpleNamespace(data={CONF_KLIK_ID: "school01", CONF_ACCOUNT_KEY: "a" * 64})
     flow._get_reauth_entry = lambda: entry
     result = await flow.async_step_reauth_confirm({})
     assert result["step_id"] == "browser"
@@ -419,9 +415,7 @@ async def test_reauthentication_launches_new_oauth_attempt(hass, monkeypatch) ->
 
 
 async def test_authorization_code_exchange_persists_only_refresh_token() -> None:
-    id_token = _jwt(
-        {"kreta:institute_code": "school01", "kreta:institute_user_id": "student"}
-    )
+    id_token = _jwt({"kreta:institute_code": "school01", "kreta:institute_user_id": "student"})
     session = _FakeSession(
         [
             _FakeResponse(
@@ -508,9 +502,7 @@ def test_auth_secrets_are_redacted() -> None:
 
 async def test_failure_logs_contain_stage_but_no_oauth_secrets(caplog) -> None:
     session = _FakeSession([_FakeResponse(400, body='{"error":"invalid_grant"}')])
-    client = KretaApiClient(
-        session=session, klik_id="school01", token_store=MemoryTokenStore()
-    )
+    client = KretaApiClient(session=session, klik_id="school01", token_store=MemoryTokenStore())
     with caplog.at_level(logging.WARNING), pytest.raises(InvalidAuthError):
         await client.async_exchange_authorization_code("code-secret", "verifier-secret")
     assert "KRÉTA auth stage failed: token_exchange" in caplog.text
@@ -520,9 +512,7 @@ async def test_failure_logs_contain_stage_but_no_oauth_secrets(caplog) -> None:
 
 async def test_http_error_preserves_safe_request_metadata() -> None:
     session = _FakeSession([_FakeResponse(500, body="private response details")])
-    client = KretaApiClient(
-        session=session, klik_id="school01", token_store=MemoryTokenStore()
-    )
+    client = KretaApiClient(session=session, klik_id="school01", token_store=MemoryTokenStore())
     client._access_token = "access-secret"
     with pytest.raises(KretaApiError) as raised:
         await client._async_request(
@@ -534,6 +524,22 @@ async def test_http_error_preserves_safe_request_metadata() -> None:
     assert raised.value.endpoint == "school01.e-kreta.hu/ellenorzo/v3/Sajat/Ertekelesek"
     assert raised.value.status == 500
     assert raised.value.safe_description == "http_error_response"
+
+
+async def test_forbidden_feature_does_not_trigger_token_refresh() -> None:
+    session = _FakeSession([_FakeResponse(403, body="private response details")])
+    store = MemoryTokenStore()
+    client = KretaApiClient(session=session, klik_id="school01", token_store=store)
+    client._access_token = "access-secret"
+    with pytest.raises(KretaApiError) as raised:
+        await client._async_request(
+            "get",
+            "https://school01.e-kreta.hu/ellenorzo/v3/Sajat/Ertekelesek",
+        )
+    assert not isinstance(raised.value, InvalidAuthError)
+    assert raised.value.status == 403
+    assert "private response details" not in str(raised.value)
+    assert len(session.requests) == 1
 
 
 async def test_coordinator_logs_operation_and_preserves_exception_chain(caplog) -> None:
@@ -565,6 +571,64 @@ async def test_coordinator_logs_operation_and_preserves_exception_chain(caplog) 
     assert "exception=KretaApiError" in caplog.text
     assert "description=authenticated_request_rejected" in caplog.text
     assert "private response containing student data" not in caplog.text
+
+
+async def test_optional_endpoint_failure_keeps_coordinator_available(caplog, monkeypatch) -> None:
+    class _PartiallyAvailableClient:
+        async def async_get_student_profile(self):
+            return StudentProfile(student_name=None, school_name="School")
+
+        async def async_get_lessons(self, _start, _end):
+            raise KretaApiError(
+                "private response details",
+                method="GET",
+                endpoint="school01.e-kreta.hu/ellenorzo/v3/Sajat/OrarendElemek",
+                status=404,
+                safe_description="http_error_response",
+            )
+
+        async def async_get_announced_tests(self, _start, _end):
+            return []
+
+        async def async_get_grades(self, _start, _end):
+            return []
+
+        async def async_get_homework(self, _start, _end):
+            return []
+
+        async def async_get_absences(self, _start, _end):
+            return []
+
+        async def async_get_messages(self):
+            return []
+
+        async def async_get_school_year_calendar(self):
+            return []
+
+    async def _no_new_records(*_args):
+        return 0
+
+    monkeypatch.setattr(KretaDataUpdateCoordinator, "_emit_new", _no_new_records)
+    monkeypatch.setattr(KretaDataUpdateCoordinator, "_emit_timetable_changes", _no_new_records)
+    coordinator = object.__new__(KretaDataUpdateCoordinator)
+    coordinator.client = _PartiallyAvailableClient()
+    coordinator.config_entry = SimpleNamespace(
+        options={},
+        data={CONF_KLIK_ID: "school01", CONF_LOOKAHEAD_WEEKS: 2},
+    )
+    coordinator.last_error_message = None
+    coordinator.last_error_time = None
+    coordinator.degraded_operations = set()
+    with caplog.at_level(logging.ERROR):
+        data = await coordinator._async_update_data()
+    assert data.profile.school_name == "School"
+    assert data.events == []
+    assert data.school_year_calendar == []
+    assert coordinator.last_error_message == "partial_data"
+    assert coordinator.degraded_operations == {"lessons"}
+    assert "operation=lessons" in caplog.text
+    assert "status=404" in caplog.text
+    assert "private response details" not in caplog.text
 
 
 def test_token_repr_does_not_expose_secrets() -> None:

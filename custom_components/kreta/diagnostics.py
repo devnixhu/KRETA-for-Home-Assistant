@@ -26,6 +26,7 @@ async def async_get_config_entry_diagnostics(
         },
         "last_update_success": coordinator.last_update_success,
         "last_status": coordinator.last_error_message or "ok",
+        "unavailable_operations": sorted(coordinator.degraded_operations),
         "last_success": data.last_success.isoformat() if data else None,
         "entity_source_counts": {
             "lessons": data.lessons_count if data else 0,

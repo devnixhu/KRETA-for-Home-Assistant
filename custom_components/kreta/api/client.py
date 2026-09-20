@@ -40,7 +40,6 @@ from .storage import TokenStore
 
 _LOGGER = logging.getLogger(__name__)
 KRETA_TIMEZONE = ZoneInfo("Europe/Budapest")
-_ERROR_BODY_MAX_LENGTH = 200
 _MAX_RESPONSE_BYTES = 2_000_000
 
 
@@ -54,21 +53,6 @@ def _response_endpoint(response: ClientResponse, fallback_url: str) -> str:
     """Return a query-free endpoint label for a response."""
     response_url = getattr(response, "url", None)
     return _endpoint_label(str(response_url) if response_url else fallback_url)
-
-
-def _summarize_error_body(body: str) -> str:
-    """Return a concise summary of an HTTP error response body.
-
-    HTML pages (e.g. maintenance splash screens) are collapsed to a short
-    label so they don't flood the HA UI with raw markup.  Plain-text bodies
-    are kept verbatim up to _ERROR_BODY_MAX_LENGTH characters.
-    """
-    stripped = body.lstrip("\ufeff").lstrip()
-    if stripped.lower().startswith(("<!doctype", "<html")):
-        return "(HTML response)"
-    if len(body) <= _ERROR_BODY_MAX_LENGTH:
-        return body
-    return body[:_ERROR_BODY_MAX_LENGTH] + "…"
 
 
 class KretaApiClient:
@@ -490,7 +474,7 @@ class KretaApiClient:
             response_endpoint,
             response.status,
         )
-        if response.status in {401, 403}:
+        if response.status == 401:
             response.release()
             if retry_on_auth_error:
                 self._access_token = None
@@ -526,9 +510,9 @@ class KretaApiClient:
             )
 
         if response.status >= 400:
-            body = await response.text()
+            response.release()
             raise KretaApiError(
-                f"KRÉTA request failed with HTTP {response.status}: {_summarize_error_body(body)}",
+                f"KRÉTA request failed with HTTP {response.status}",
                 method=method.upper(),
                 endpoint=response_endpoint,
                 status=response.status,
@@ -605,7 +589,7 @@ class KretaApiClient:
             trace.log_failure(_LOGGER, "authentication")
             self._log_auth_stage_failure("token_exchange")
             raise KretaApiError(
-                f"Refresh-token exchange failed ({response.status}): {_summarize_error_body(body)}",
+                f"Refresh-token exchange failed with HTTP {response.status}",
                 method="POST",
                 endpoint=_response_endpoint(response, TOKEN_URL),
                 status=response.status,
@@ -646,9 +630,7 @@ class KretaApiClient:
         if new_refresh is not None:
             await self._token_store.async_set_refresh_token(new_refresh)
 
-    async def async_exchange_authorization_code(
-        self, code: str, code_verifier: str
-    ) -> str:
+    async def async_exchange_authorization_code(self, code: str, code_verifier: str) -> str:
         """Exchange a transient authorization code and return an account key."""
         trace = AuthDiagnosticsTrace()
         request_data: dict[str, Any] = {

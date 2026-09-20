@@ -208,6 +208,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
         self.config_entry = config_entry
         self.last_error_message: str | None = None
         self.last_error_time: datetime | None = None
+        self.degraded_operations: set[str] = set()
         minutes = config_entry.options.get(CONF_REFRESH_MINUTES)
         if minutes is None:
             legacy_hours = config_entry.options.get(
@@ -218,9 +219,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 if legacy_hours == DEFAULT_REFRESH_HOURS
                 else min(60, legacy_hours * 60)
             )
-        self._baseline = KretaBaselineStore(
-            hass, entry_storage_key(dict(config_entry.data))
-        )
+        self._baseline = KretaBaselineStore(hass, entry_storage_key(dict(config_entry.data)))
         super().__init__(
             hass,
             logger=_LOGGER,
@@ -270,6 +269,22 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             fallback_endpoint,
         )
         return result
+
+    async def _async_optional_api_operation(
+        self,
+        operation: str,
+        method: str,
+        endpoint: str,
+        request: Awaitable[Any],
+    ) -> Any:
+        """Run an independently available KRÉTA feature operation."""
+        try:
+            return await self._async_api_operation(operation, method, endpoint, request)
+        except (InvalidAuthError, KretaRateLimitError, KretaSecurityError):
+            raise
+        except (CannotConnectError, KretaApiError):
+            self.degraded_operations.add(operation)
+            return []
 
     async def _emit_new(self, category: str, records: list[object], event_type: str) -> int:
         identities = {_record_id(category, record) for record in records}
@@ -366,6 +381,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
         range_end = datetime.combine(week_end, time.max, tzinfo=dt_util.DEFAULT_TIME_ZONE)
         history_start = week_start - timedelta(weeks=lookahead)
         institution = self.config_entry.data["klik_id"]
+        self.degraded_operations = set()
         try:
             profile = await self._async_api_operation(
                 "student_profile",
@@ -374,7 +390,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 self.client.async_get_student_profile(),
             )
             lessons = (
-                await self._async_api_operation(
+                await self._async_optional_api_operation(
                     "lessons",
                     "GET",
                     api_url(institution, "Sajat/OrarendElemek"),
@@ -384,7 +400,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 else []
             )
             tests = (
-                await self._async_api_operation(
+                await self._async_optional_api_operation(
                     "announced_tests",
                     "GET",
                     api_url(institution, "Sajat/BejelentettSzamonkeresek"),
@@ -394,7 +410,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 else []
             )
             grades = (
-                await self._async_api_operation(
+                await self._async_optional_api_operation(
                     "grades",
                     "GET",
                     api_url(institution, "Sajat/Ertekelesek"),
@@ -404,7 +420,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 else []
             )
             homework = (
-                await self._async_api_operation(
+                await self._async_optional_api_operation(
                     "homework",
                     "GET",
                     api_url(institution, "Sajat/HaziFeladatok"),
@@ -414,7 +430,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 else []
             )
             absences = (
-                await self._async_api_operation(
+                await self._async_optional_api_operation(
                     "absences",
                     "GET",
                     api_url(institution, "Sajat/Mulasztasok"),
@@ -424,7 +440,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 else []
             )
             messages = (
-                await self._async_api_operation(
+                await self._async_optional_api_operation(
                     "messages",
                     "GET",
                     MESSAGES_URL,
@@ -434,7 +450,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 else []
             )
             school_year = (
-                await self._async_api_operation(
+                await self._async_optional_api_operation(
                     "school_year_calendar",
                     "GET",
                     api_url(institution, "Sajat/Intezmenyek/TanevRendjeElemek"),
@@ -465,8 +481,12 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             "messages": await self._emit_new("messages", messages, EVENT_NEW_MESSAGE),
             "timetable": await self._emit_timetable_changes(events),
         }
-        self.last_error_message = None
-        self.last_error_time = None
+        if self.degraded_operations:
+            self.last_error_message = "partial_data"
+            self.last_error_time = dt_util.utcnow()
+        else:
+            self.last_error_message = None
+            self.last_error_time = None
         return KretaCoordinatorData(
             profile=profile,
             events=events,

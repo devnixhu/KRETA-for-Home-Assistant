@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## 1.7.6
+
+### Fixed
+
+- A failure in an independently available KRÉTA data group no longer prevents
+  the entire Home Assistant config entry from loading after successful OAuth
+  authentication.
+- HTTP 403 feature-permission responses no longer trigger an unnecessary token
+  refresh or reauthentication request.
+- HTTP error response bodies are no longer included in raised API exception
+  messages.
+- Partial refreshes are exposed as `partial_data`, with unavailable operation
+  names included in privacy-safe diagnostics.
+
 ## 2026.09.16.4
 
 ### Added
