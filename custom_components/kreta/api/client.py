@@ -44,6 +44,18 @@ _ERROR_BODY_MAX_LENGTH = 200
 _MAX_RESPONSE_BYTES = 2_000_000
 
 
+def _endpoint_label(url: str) -> str:
+    """Return only the hostname and path of a validated endpoint."""
+    parsed = urlsplit(url)
+    return f"{parsed.hostname or 'unknown'}{parsed.path or '/'}"
+
+
+def _response_endpoint(response: ClientResponse, fallback_url: str) -> str:
+    """Return a query-free endpoint label for a response."""
+    response_url = getattr(response, "url", None)
+    return _endpoint_label(str(response_url) if response_url else fallback_url)
+
+
 def _summarize_error_body(body: str) -> str:
     """Return a concise summary of an HTTP error response body.
 
@@ -333,12 +345,25 @@ class KretaApiClient:
     async def async_get_messages(self) -> list[MessageSummary]:
         """Fetch read-only inbox metadata; message bodies are never requested."""
         response = await self._async_request("get", MESSAGES_URL, include_messages=True)
+        endpoint = _response_endpoint(response, MESSAGES_URL)
         try:
             payload = await response.json()
         except (ClientError, ValueError) as err:
-            raise ApiResponseError("Message response is not valid JSON") from err
+            raise ApiResponseError(
+                "Message response is not valid JSON",
+                method="GET",
+                endpoint=endpoint,
+                status=response.status,
+                safe_description="invalid_json_response",
+            ) from err
         if not isinstance(payload, list) or len(payload) > 2000:
-            raise ApiResponseError("Message response has an invalid shape or size")
+            raise ApiResponseError(
+                "Message response has an invalid shape or size",
+                method="GET",
+                endpoint=endpoint,
+                status=response.status,
+                safe_description="invalid_response_shape_or_size",
+            )
         messages: list[MessageSummary] = []
         for item in payload:
             if not isinstance(item, dict):
@@ -366,19 +391,45 @@ class KretaApiClient:
 
     async def _async_get_json(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """Issue an authenticated GET request and return JSON."""
-        response = await self._async_request("get", f"{self._api_base_url}/{path}", params=params)
+        url = f"{self._api_base_url}/{path}"
+        response = await self._async_request("get", url, params=params)
+        endpoint = _response_endpoint(response, url)
         content_length = response.headers.get("Content-Length")
         if content_length and int(content_length) > _MAX_RESPONSE_BYTES:
             response.release()
-            raise ApiResponseError("KRÉTA response exceeded the size limit")
+            raise ApiResponseError(
+                "KRÉTA response exceeded the size limit",
+                method="GET",
+                endpoint=endpoint,
+                status=response.status,
+                safe_description="response_size_limit_exceeded",
+            )
         try:
             payload = await response.json()
         except (ClientError, ValueError) as err:
-            raise ApiResponseError(f"Invalid JSON received from {path}") from err
+            raise ApiResponseError(
+                f"Invalid JSON received from {path}",
+                method="GET",
+                endpoint=endpoint,
+                status=response.status,
+                safe_description="invalid_json_response",
+            ) from err
         if isinstance(payload, list) and len(payload) > 5000:
-            raise ApiResponseError("KRÉTA response contained too many records")
+            raise ApiResponseError(
+                "KRÉTA response contained too many records",
+                method="GET",
+                endpoint=endpoint,
+                status=response.status,
+                safe_description="response_record_limit_exceeded",
+            )
         if not isinstance(payload, (dict, list)):
-            raise ApiResponseError("KRÉTA response has an invalid shape")
+            raise ApiResponseError(
+                "KRÉTA response has an invalid shape",
+                method="GET",
+                endpoint=endpoint,
+                status=response.status,
+                safe_description="invalid_response_shape",
+            )
         return payload
 
     async def _async_request(
@@ -401,7 +452,12 @@ class KretaApiClient:
         if require_auth and self._access_token is not None:
             request_headers["Authorization"] = f"Bearer {self._access_token}"
 
-        _LOGGER.debug("Starting validated KRÉTA %s request", method.upper())
+        endpoint = _endpoint_label(url)
+        _LOGGER.debug(
+            "Starting validated KRÉTA request: method=%s endpoint=%s",
+            method.upper(),
+            endpoint,
+        )
         try:
             response = await self._safe_session_request(
                 method,
@@ -412,10 +468,28 @@ class KretaApiClient:
                 follow_redirects=allow_redirects,
                 include_messages=include_messages,
             )
+        except KretaSecurityError as err:
+            err.add_http_context(
+                method=method.upper(),
+                endpoint=endpoint,
+                safe_description="network_policy_rejected_request",
+            )
+            raise
         except ClientError as err:
-            raise CannotConnectError("Could not reach a KRÉTA endpoint") from err
+            raise CannotConnectError(
+                "Could not reach a KRÉTA endpoint",
+                method=method.upper(),
+                endpoint=endpoint,
+                safe_description="network_connection_failed",
+            ) from err
 
-        _LOGGER.debug("KRÉTA request completed with HTTP %d", response.status)
+        response_endpoint = _response_endpoint(response, url)
+        _LOGGER.debug(
+            "KRÉTA request completed: method=%s endpoint=%s status=%d",
+            method.upper(),
+            response_endpoint,
+            response.status,
+        )
         if response.status in {401, 403}:
             response.release()
             if retry_on_auth_error:
@@ -432,19 +506,33 @@ class KretaApiClient:
                     require_auth=require_auth,
                     include_messages=include_messages,
                 )
-            raise InvalidAuthError("KRÉTA rejected the authenticated request")
+            raise InvalidAuthError(
+                "KRÉTA rejected the authenticated request",
+                method=method.upper(),
+                endpoint=response_endpoint,
+                status=response.status,
+                safe_description="authenticated_request_rejected",
+            )
 
         if response.status == 429:
             retry_after = response.headers.get("Retry-After", "")
             response.release()
             raise KretaRateLimitError(
-                f"KRÉTA rate limit reached; retry after {retry_after or 'later'}"
+                f"KRÉTA rate limit reached; retry after {retry_after or 'later'}",
+                method=method.upper(),
+                endpoint=response_endpoint,
+                status=response.status,
+                safe_description="rate_limited",
             )
 
         if response.status >= 400:
             body = await response.text()
             raise KretaApiError(
-                f"KRÉTA request failed with HTTP {response.status}: {_summarize_error_body(body)}"
+                f"KRÉTA request failed with HTTP {response.status}: {_summarize_error_body(body)}",
+                method=method.upper(),
+                endpoint=response_endpoint,
+                status=response.status,
+                safe_description="http_error_response",
             )
         return response
 
@@ -459,7 +547,12 @@ class KretaApiClient:
         }
         try:
             response = await self._safe_session_request("post", TOKEN_URL, data=request_data)
-        except KretaSecurityError:
+        except KretaSecurityError as err:
+            err.add_http_context(
+                method="POST",
+                endpoint=_endpoint_label(TOKEN_URL),
+                safe_description="network_policy_rejected_request",
+            )
             self._log_auth_stage_failure("token_exchange")
             raise
         except ClientError as err:
@@ -472,7 +565,12 @@ class KretaApiClient:
             )
             trace.log_failure(_LOGGER, "authentication")
             self._log_auth_stage_failure("token_exchange")
-            raise CannotConnectError("Could not refresh the Kreta access token") from err
+            raise CannotConnectError(
+                "Could not refresh the Kreta access token",
+                method="POST",
+                endpoint=_endpoint_label(TOKEN_URL),
+                safe_description="network_connection_failed",
+            ) from err
 
         if response.status in {400, 401, 403}:
             body = await response.text()
@@ -487,7 +585,13 @@ class KretaApiClient:
             trace.log_failure(_LOGGER, "authentication")
             self._log_auth_stage_failure("token_exchange")
             await self._token_store.async_set_refresh_token(None)
-            raise InvalidAuthError("Stored refresh token is no longer valid")
+            raise InvalidAuthError(
+                "Stored refresh token is no longer valid",
+                method="POST",
+                endpoint=_response_endpoint(response, TOKEN_URL),
+                status=response.status,
+                safe_description="refresh_token_rejected",
+            )
         if response.status >= 400:
             body = await response.text()
             trace.record_exchange(
@@ -501,14 +605,24 @@ class KretaApiClient:
             trace.log_failure(_LOGGER, "authentication")
             self._log_auth_stage_failure("token_exchange")
             raise KretaApiError(
-                f"Refresh-token exchange failed ({response.status}): {_summarize_error_body(body)}"
+                f"Refresh-token exchange failed ({response.status}): {_summarize_error_body(body)}",
+                method="POST",
+                endpoint=_response_endpoint(response, TOKEN_URL),
+                status=response.status,
+                safe_description="token_endpoint_http_error",
             )
 
         try:
             payload = await response.json()
         except (ClientError, ValueError) as err:
             self._log_auth_stage_failure("token_exchange")
-            raise InvalidAuthError("Refresh-token endpoint returned invalid JSON") from err
+            raise InvalidAuthError(
+                "Refresh-token endpoint returned invalid JSON",
+                method="POST",
+                endpoint=_response_endpoint(response, TOKEN_URL),
+                status=response.status,
+                safe_description="token_endpoint_invalid_json",
+            ) from err
         if "access_token" not in payload:
             trace.record_exchange(
                 label="POST token (refresh) — unexpected payload",
@@ -520,7 +634,13 @@ class KretaApiClient:
             )
             trace.log_failure(_LOGGER, "authentication")
             self._log_auth_stage_failure("token_exchange")
-            raise InvalidAuthError("Refresh-token exchange did not return an access token")
+            raise InvalidAuthError(
+                "Refresh-token exchange did not return an access token",
+                method="POST",
+                endpoint=_response_endpoint(response, TOKEN_URL),
+                status=response.status,
+                safe_description="token_endpoint_missing_access_token",
+            )
         self._access_token = payload["access_token"]
         new_refresh = payload.get("refresh_token")
         if new_refresh is not None:
@@ -555,7 +675,11 @@ class KretaApiClient:
                 trace.log_failure(_LOGGER, "authentication")
                 self._log_auth_stage_failure("token_exchange")
                 raise InvalidAuthError(
-                    f"Authorization-code exchange failed with {token_response.status}"
+                    f"Authorization-code exchange failed with {token_response.status}",
+                    method="POST",
+                    endpoint=_response_endpoint(token_response, TOKEN_URL),
+                    status=token_response.status,
+                    safe_description="authorization_code_rejected",
                 )
             trace.record_exchange(
                 label="POST token (auth code)",
@@ -564,7 +688,12 @@ class KretaApiClient:
                 request_data=request_data,
                 response_status=token_response.status,
             )
-        except KretaSecurityError:
+        except KretaSecurityError as err:
+            err.add_http_context(
+                method="POST",
+                endpoint=_endpoint_label(TOKEN_URL),
+                safe_description="network_policy_rejected_request",
+            )
             self._log_auth_stage_failure("token_exchange")
             raise
         except ClientError as err:
@@ -576,13 +705,24 @@ class KretaApiClient:
             )
             trace.log_failure(_LOGGER, "authentication")
             self._log_auth_stage_failure("token_exchange")
-            raise CannotConnectError("Could not reach the KRÉTA token endpoint") from err
+            raise CannotConnectError(
+                "Could not reach the KRÉTA token endpoint",
+                method="POST",
+                endpoint=_endpoint_label(TOKEN_URL),
+                safe_description="network_connection_failed",
+            ) from err
 
         try:
             payload = await token_response.json()
         except (ClientError, ValueError) as err:
             self._log_auth_stage_failure("token_exchange")
-            raise InvalidAuthError("Token endpoint returned invalid JSON") from err
+            raise InvalidAuthError(
+                "Token endpoint returned invalid JSON",
+                method="POST",
+                endpoint=_response_endpoint(token_response, TOKEN_URL),
+                status=token_response.status,
+                safe_description="token_endpoint_invalid_json",
+            ) from err
         required = ("access_token", "refresh_token", "id_token")
         if any(not isinstance(payload.get(key), str) or not payload[key] for key in required):
             trace.record_exchange(
@@ -595,7 +735,13 @@ class KretaApiClient:
             )
             trace.log_failure(_LOGGER, "authentication")
             self._log_auth_stage_failure("token_exchange")
-            raise InvalidAuthError("KRÉTA token response omitted a required token")
+            raise InvalidAuthError(
+                "KRÉTA token response omitted a required token",
+                method="POST",
+                endpoint=_response_endpoint(token_response, TOKEN_URL),
+                status=token_response.status,
+                safe_description="token_endpoint_missing_required_token",
+            )
         account_key = account_key_from_id_token(payload["id_token"], self._klik_id)
         self._access_token = payload["access_token"]
         await self._token_store.async_set_refresh_token(payload["refresh_token"])

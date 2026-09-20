@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 from aiohttp import web
 from homeassistant import data_entry_flow
+from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.kreta.api.client import KretaApiClient
 from custom_components.kreta.api.diagnostics import (
@@ -21,6 +22,7 @@ from custom_components.kreta.api.diagnostics import (
 from custom_components.kreta.api.endpoints import TOKEN_URL
 from custom_components.kreta.api.exceptions import (
     InvalidAuthError,
+    KretaApiError,
     KretaSecurityError,
     OAuthCallbackError,
     OAuthCodeMissingError,
@@ -364,6 +366,33 @@ async def test_config_flow_rejects_callback_state_mismatch(hass, monkeypatch) ->
     assert result["errors"] == {"base": "oauth_state_mismatch"}
 
 
+async def test_callback_failure_categories_are_safe(caplog) -> None:
+    flow = KretaConfigFlow()
+    flow._attempt = PkceAttempt.create()
+    flow._authorization_url = "https://idp.e-kreta.hu/Account/Login"
+    flow._pending_data = {CONF_KLIK_ID: "school01"}
+    secret_state = flow._attempt.state
+    cases = (
+        (
+            f"{OAUTH_REDIRECT_URI}?code=secret-code&state=wrong-secret-state",
+            "callback_state_mismatch",
+        ),
+        (f"{OAUTH_REDIRECT_URI}?state={secret_state}", "callback_code_missing"),
+        (
+            f"https://evil.example/callback?code=secret-code&state={secret_state}",
+            "callback_invalid_host_or_path",
+        ),
+    )
+    with caplog.at_level(logging.WARNING):
+        for callback_url, category in cases:
+            caplog.clear()
+            await flow.async_step_oauth_callback({CONF_OAUTH_REDIRECT_URL: callback_url})
+            assert f"KRÉTA OAuth stage failed: {category}" in caplog.text
+            assert "secret-code" not in caplog.text
+            assert "wrong-secret-state" not in caplog.text
+            assert secret_state not in caplog.text
+
+
 async def test_reauthentication_launches_new_oauth_attempt(hass, monkeypatch) -> None:
     monkeypatch.setattr(
         hass,
@@ -487,6 +516,55 @@ async def test_failure_logs_contain_stage_but_no_oauth_secrets(caplog) -> None:
     assert "KRÉTA auth stage failed: token_exchange" in caplog.text
     assert "code-secret" not in caplog.text
     assert "verifier-secret" not in caplog.text
+
+
+async def test_http_error_preserves_safe_request_metadata() -> None:
+    session = _FakeSession([_FakeResponse(500, body="private response details")])
+    client = KretaApiClient(
+        session=session, klik_id="school01", token_store=MemoryTokenStore()
+    )
+    client._access_token = "access-secret"
+    with pytest.raises(KretaApiError) as raised:
+        await client._async_request(
+            "get",
+            "https://school01.e-kreta.hu/ellenorzo/v3/Sajat/Ertekelesek",
+            retry_on_auth_error=False,
+        )
+    assert raised.value.method == "GET"
+    assert raised.value.endpoint == "school01.e-kreta.hu/ellenorzo/v3/Sajat/Ertekelesek"
+    assert raised.value.status == 500
+    assert raised.value.safe_description == "http_error_response"
+
+
+async def test_coordinator_logs_operation_and_preserves_exception_chain(caplog) -> None:
+    underlying = KretaApiError(
+        "private response containing student data",
+        method="GET",
+        endpoint="school01.e-kreta.hu/ellenorzo/v3/Sajat/TanuloAdatlap",
+        status=403,
+        safe_description="authenticated_request_rejected",
+    )
+
+    class _FailingClient:
+        async def async_get_student_profile(self):
+            raise underlying
+
+    coordinator = object.__new__(KretaDataUpdateCoordinator)
+    coordinator.client = _FailingClient()
+    coordinator.config_entry = SimpleNamespace(
+        options={},
+        data={CONF_KLIK_ID: "school01", CONF_LOOKAHEAD_WEEKS: 2},
+    )
+    with caplog.at_level(logging.ERROR), pytest.raises(UpdateFailed) as raised:
+        await coordinator._async_update_data()
+    assert raised.value.__cause__ is underlying
+    assert "operation=student_profile" in caplog.text
+    assert "method=GET" in caplog.text
+    assert "endpoint=school01.e-kreta.hu/ellenorzo/v3/Sajat/TanuloAdatlap" in caplog.text
+    assert "status=403" in caplog.text
+    assert "exception=KretaApiError" in caplog.text
+    assert "description=authenticated_request_rejected" in caplog.text
+    assert "private response containing student data" not in caplog.text
 
 
 def test_token_repr_does_not_expose_secrets() -> None:

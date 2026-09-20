@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+from typing import Any
+from urllib.parse import urlsplit
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -14,7 +17,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api.client import KretaApiClient
-from .api.exceptions import CannotConnectError, InvalidAuthError, KretaApiError, KretaRateLimitError
+from .api.endpoints import MESSAGES_URL, api_url
+from .api.exceptions import (
+    ApiResponseError,
+    CannotConnectError,
+    InvalidAuthError,
+    KretaApiError,
+    KretaRateLimitError,
+    KretaSecurityError,
+)
 from .api.models import (
     Absence,
     AnnouncedTest,
@@ -99,6 +110,33 @@ def _record_id(kind: str, record: object) -> str:
     if isinstance(record, MessageSummary):
         return _stable((kind, record.received_at, record.sender, record.subject))
     raise TypeError(f"Unsupported baseline record: {type(record).__name__}")
+
+
+def _safe_endpoint_label(endpoint: str) -> str:
+    """Return a query-free hostname and path for diagnostics."""
+    parsed = urlsplit(endpoint)
+    if parsed.hostname:
+        return f"{parsed.hostname}{parsed.path or '/'}"
+    return endpoint.split("?", 1)[0].split("#", 1)[0][:240]
+
+
+def _safe_error_description(err: Exception) -> str:
+    """Return a bounded category without exception text or response data."""
+    if isinstance(err, KretaApiError) and err.safe_description:
+        return err.safe_description
+    if isinstance(err, InvalidAuthError):
+        return "authentication_required"
+    if isinstance(err, KretaRateLimitError):
+        return "rate_limited"
+    if isinstance(err, CannotConnectError):
+        return "network_connection_failed"
+    if isinstance(err, ApiResponseError):
+        return "invalid_api_response"
+    if isinstance(err, KretaSecurityError):
+        return "network_policy_rejected_request"
+    if isinstance(err, KretaApiError):
+        return "api_request_failed"
+    return "unexpected_operation_failure"
 
 
 def merge_lessons_and_tests(
@@ -194,6 +232,45 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
     def _enabled(self, key: str) -> bool:
         return bool(self.config_entry.options.get(key, True))
 
+    async def _async_api_operation(
+        self,
+        operation: str,
+        method: str,
+        endpoint: str,
+        request: Awaitable[Any],
+    ) -> Any:
+        """Run one API operation with privacy-safe stage diagnostics."""
+        fallback_endpoint = _safe_endpoint_label(endpoint)
+        _LOGGER.debug(
+            "KRÉTA API operation started: operation=%s method=%s endpoint=%s",
+            operation,
+            method,
+            fallback_endpoint,
+        )
+        try:
+            result = await request
+        except Exception as err:
+            error_endpoint = getattr(err, "endpoint", None) or fallback_endpoint
+            status = getattr(err, "status", None)
+            _LOGGER.error(
+                "KRÉTA API operation failed: operation=%s method=%s endpoint=%s "
+                "status=%s exception=%s description=%s",
+                operation,
+                getattr(err, "method", None) or method,
+                _safe_endpoint_label(error_endpoint),
+                status if status is not None else "unknown",
+                type(err).__name__,
+                _safe_error_description(err),
+            )
+            raise
+        _LOGGER.debug(
+            "KRÉTA API operation completed: operation=%s method=%s endpoint=%s",
+            operation,
+            method,
+            fallback_endpoint,
+        )
+        return result
+
     async def _emit_new(self, category: str, records: list[object], event_type: str) -> int:
         identities = {_record_id(category, record) for record in records}
         had_baseline, new_hashes = await self._baseline.async_update(category, identities)
@@ -288,38 +365,81 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
         range_start = datetime.combine(week_start, time.min, tzinfo=dt_util.DEFAULT_TIME_ZONE)
         range_end = datetime.combine(week_end, time.max, tzinfo=dt_util.DEFAULT_TIME_ZONE)
         history_start = week_start - timedelta(weeks=lookahead)
+        institution = self.config_entry.data["klik_id"]
         try:
-            profile = await self.client.async_get_student_profile()
+            profile = await self._async_api_operation(
+                "student_profile",
+                "GET",
+                api_url(institution, "Sajat/TanuloAdatlap"),
+                self.client.async_get_student_profile(),
+            )
             lessons = (
-                await self.client.async_get_lessons(week_start, week_end)
+                await self._async_api_operation(
+                    "lessons",
+                    "GET",
+                    api_url(institution, "Sajat/OrarendElemek"),
+                    self.client.async_get_lessons(week_start, week_end),
+                )
                 if self._enabled(CONF_TIMETABLE)
                 else []
             )
             tests = (
-                await self.client.async_get_announced_tests(week_start, week_end)
+                await self._async_api_operation(
+                    "announced_tests",
+                    "GET",
+                    api_url(institution, "Sajat/BejelentettSzamonkeresek"),
+                    self.client.async_get_announced_tests(week_start, week_end),
+                )
                 if self._enabled(CONF_TESTS)
                 else []
             )
             grades = (
-                await self.client.async_get_grades(history_start, week_end)
+                await self._async_api_operation(
+                    "grades",
+                    "GET",
+                    api_url(institution, "Sajat/Ertekelesek"),
+                    self.client.async_get_grades(history_start, week_end),
+                )
                 if self._enabled(CONF_GRADES)
                 else []
             )
             homework = (
-                await self.client.async_get_homework(week_start, week_end)
+                await self._async_api_operation(
+                    "homework",
+                    "GET",
+                    api_url(institution, "Sajat/HaziFeladatok"),
+                    self.client.async_get_homework(week_start, week_end),
+                )
                 if self._enabled(CONF_HOMEWORK)
                 else []
             )
             absences = (
-                await self.client.async_get_absences(history_start, week_end)
+                await self._async_api_operation(
+                    "absences",
+                    "GET",
+                    api_url(institution, "Sajat/Mulasztasok"),
+                    self.client.async_get_absences(history_start, week_end),
+                )
                 if self._enabled(CONF_ABSENCES)
                 else []
             )
             messages = (
-                await self.client.async_get_messages() if self._enabled(CONF_MESSAGES) else []
+                await self._async_api_operation(
+                    "messages",
+                    "GET",
+                    MESSAGES_URL,
+                    self.client.async_get_messages(),
+                )
+                if self._enabled(CONF_MESSAGES)
+                else []
             )
             school_year = (
-                await self.client.async_get_school_year_calendar()
+                await self._async_api_operation(
+                    "school_year_calendar",
+                    "GET",
+                    api_url(institution, "Sajat/Intezmenyek/TanevRendjeElemek"),
+                    self.client.async_get_school_year_calendar(),
+                )
                 if self._enabled(CONF_TIMETABLE)
                 else []
             )

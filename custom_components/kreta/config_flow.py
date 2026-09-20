@@ -224,13 +224,13 @@ class KretaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._attempt.state,
             )
         except OAuthStateMismatchError:
-            self._log_oauth_failure("callback_validation")
+            self._log_oauth_failure("callback_state_mismatch")
             return self._show_oauth_callback({"base": "oauth_state_mismatch"})
         except OAuthCodeMissingError:
-            self._log_oauth_failure("callback_validation")
+            self._log_oauth_failure("callback_code_missing")
             return self._show_oauth_callback({"base": "oauth_code_missing"})
         except (OAuthCallbackError, KretaSecurityError):
-            self._log_oauth_failure("callback_validation")
+            self._log_oauth_failure("callback_invalid_host_or_path")
             return self._show_oauth_callback({"base": "oauth_callback_invalid"})
         memory_store = MemoryTokenStore()
         client = KretaApiClient(
