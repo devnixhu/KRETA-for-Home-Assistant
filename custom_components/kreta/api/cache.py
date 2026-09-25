@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -18,6 +18,7 @@ from .models import (
     MergedCalendarEvent,
     MessageSummary,
     SchoolYearMilestone,
+    TimetableChange,
 )
 
 
@@ -32,7 +33,14 @@ class KretaCacheSnapshot:
     absences: list[Absence] = field(default_factory=list)
     messages: list[MessageSummary] = field(default_factory=list)
     school_year: list[SchoolYearMilestone] = field(default_factory=list)
+    changes: list[TimetableChange] = field(default_factory=list)
     school_year_updated_at: datetime | None = None
+    lessons_covered_from: date | None = None
+    lessons_covered_until: date | None = None
+    grades_covered_from: date | None = None
+    absences_covered_from: date | None = None
+    tests_covered_until: date | None = None
+    homework_covered_until: date | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return a bounded JSON-serializable storage payload."""
@@ -44,9 +52,28 @@ class KretaCacheSnapshot:
             "absences": [item.as_dict() for item in self.absences[-3000:]],
             "messages": [item.as_dict() for item in self.messages[:200]],
             "school_year": [item.as_dict() for item in self.school_year[-1000:]],
+            "changes": [item.as_dict() for item in self.changes[-200:]],
             "school_year_updated_at": (
                 self.school_year_updated_at.isoformat() if self.school_year_updated_at else None
             ),
+            "lessons_covered_from": self.lessons_covered_from.isoformat()
+            if self.lessons_covered_from
+            else None,
+            "lessons_covered_until": self.lessons_covered_until.isoformat()
+            if self.lessons_covered_until
+            else None,
+            "grades_covered_from": self.grades_covered_from.isoformat()
+            if self.grades_covered_from
+            else None,
+            "absences_covered_from": self.absences_covered_from.isoformat()
+            if self.absences_covered_from
+            else None,
+            "tests_covered_until": self.tests_covered_until.isoformat()
+            if self.tests_covered_until
+            else None,
+            "homework_covered_until": self.homework_covered_until.isoformat()
+            if self.homework_covered_until
+            else None,
         }
 
     @classmethod
@@ -67,7 +94,22 @@ class KretaCacheSnapshot:
                     continue
             return result
 
+        def parse_date(name: str) -> date | None:
+            value = data.get(name)
+            if not isinstance(value, str):
+                return None
+            try:
+                return date.fromisoformat(value)
+            except ValueError:
+                return None
+
         updated_at = data.get("school_year_updated_at")
+        try:
+            parsed_updated_at = (
+                datetime.fromisoformat(updated_at) if isinstance(updated_at, str) else None
+            )
+        except ValueError:
+            parsed_updated_at = None
         return cls(
             lessons=restore("lessons", MergedCalendarEvent.from_dict, 5000),
             grades=restore("grades", Grade.from_dict, 2000),
@@ -76,9 +118,14 @@ class KretaCacheSnapshot:
             absences=restore("absences", Absence.from_dict, 3000),
             messages=restore("messages", MessageSummary.from_dict, 200),
             school_year=restore("school_year", SchoolYearMilestone.from_dict, 1000),
-            school_year_updated_at=(
-                datetime.fromisoformat(updated_at) if isinstance(updated_at, str) else None
-            ),
+            changes=restore("changes", TimetableChange.from_dict, 200),
+            school_year_updated_at=parsed_updated_at,
+            lessons_covered_from=parse_date("lessons_covered_from"),
+            lessons_covered_until=parse_date("lessons_covered_until"),
+            grades_covered_from=parse_date("grades_covered_from"),
+            absences_covered_from=parse_date("absences_covered_from"),
+            tests_covered_until=parse_date("tests_covered_until"),
+            homework_covered_until=parse_date("homework_covered_until"),
         )
 
 
@@ -86,23 +133,17 @@ class KretaDataCache:
     """Persist one privacy-bounded cache per opaque account key."""
 
     def __init__(self, hass: HomeAssistant, account_key: str) -> None:
-        self._account_key = account_key
         self._store: Store[dict[str, Any]] = Store(
-            hass, DATA_CACHE_STORAGE_VERSION, DATA_CACHE_STORAGE_KEY
+            hass, DATA_CACHE_STORAGE_VERSION, f"{DATA_CACHE_STORAGE_KEY}_{account_key}"
         )
 
     async def async_load(self) -> KretaCacheSnapshot:
         """Load the account cache."""
         data = await self._store.async_load() or {}
-        account = data.get(self._account_key)
         return (
-            KretaCacheSnapshot.from_dict(account)
-            if isinstance(account, dict)
-            else KretaCacheSnapshot()
+            KretaCacheSnapshot.from_dict(data) if isinstance(data, dict) else KretaCacheSnapshot()
         )
 
     async def async_save(self, snapshot: KretaCacheSnapshot) -> None:
         """Persist the account cache without secrets."""
-        data = await self._store.async_load() or {}
-        data[self._account_key] = snapshot.as_dict()
-        await self._store.async_save(data)
+        await self._store.async_save(snapshot.as_dict())

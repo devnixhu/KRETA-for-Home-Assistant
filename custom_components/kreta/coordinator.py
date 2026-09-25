@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -53,7 +53,6 @@ from .const import (
     CONF_SCHOOL_YEAR,
     CONF_TESTS,
     CONF_TIMETABLE,
-    DEFAULT_FUTURE_WEEKS,
     DEFAULT_HISTORY_WEEKS,
     DEFAULT_LOOKAHEAD_WEEKS,
     DEFAULT_REFRESH_HOURS,
@@ -217,6 +216,35 @@ def _merge_window(
     )
 
 
+def _future_windows(
+    start: date,
+    end: date,
+    covered_until: date | None,
+    near_end: date,
+) -> list[tuple[date, date]]:
+    if covered_until is None:
+        return [(start, end)]
+    windows = [(start, min(end, near_end))]
+    if end > covered_until:
+        tail_start = max(covered_until + timedelta(days=1), near_end + timedelta(days=1))
+        if tail_start <= end:
+            windows.append((tail_start, end))
+    return windows
+
+
+def _merge_fetched_windows(
+    category: str,
+    existing: list[Any],
+    fetched: list[tuple[date, date, list[Any]]],
+    retained_start: date,
+    retained_end: date,
+) -> list[Any]:
+    merged = existing
+    for start, end, records in fetched:
+        merged = _merge_window(category, merged, records, start, end, retained_start, retained_end)
+    return [item for item in merged if retained_start <= _record_date(item) <= retained_end]
+
+
 def detect_timetable_changes(
     previous: list[MergedCalendarEvent], current: list[MergedCalendarEvent]
 ) -> list[TimetableChange]:
@@ -376,7 +404,9 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
         self.last_error_message: str | None = None
         self.last_error_time: datetime | None = None
         self.degraded_operations: set[str] = set()
-        minutes = config_entry.options.get(CONF_REFRESH_MINUTES)
+        minutes = config_entry.options.get(
+            CONF_REFRESH_MINUTES, config_entry.data.get(CONF_REFRESH_MINUTES)
+        )
         if minutes is None:
             legacy_hours = config_entry.options.get(
                 CONF_REFRESH_HOURS, config_entry.data.get(CONF_REFRESH_HOURS, DEFAULT_REFRESH_HOURS)
@@ -454,6 +484,25 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             self.degraded_operations.add(operation)
             return []
 
+    async def _async_fetch_windows(
+        self,
+        operation: str,
+        endpoint: str,
+        windows: list[tuple[date, date]],
+        fetch: Callable[[date, date], Awaitable[list[Any]]],
+    ) -> list[tuple[date, date, list[Any]]]:
+        results: list[tuple[date, date, list[Any]]] = []
+        for start, end in windows:
+            if start > end:
+                continue
+            records = await self._async_optional_api_operation(
+                operation, "GET", endpoint, fetch(start, end)
+            )
+            if operation in self.degraded_operations:
+                return []
+            results.append((start, end, records))
+        return results
+
     async def _emit_new(self, category: str, records: list[object], event_type: str) -> int:
         identities = {_record_id(category, record) for record in records}
         had_baseline, new_hashes = await self._baseline.async_update(category, identities)
@@ -524,11 +573,16 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             self.config_entry.data.get(CONF_LOOKAHEAD_WEEKS, DEFAULT_LOOKAHEAD_WEEKS),
         )
         future_weeks = int(
-            self.config_entry.options.get(CONF_FUTURE_WEEKS, legacy_lookahead)
-            or DEFAULT_FUTURE_WEEKS
+            self.config_entry.options.get(
+                CONF_FUTURE_WEEKS,
+                self.config_entry.data.get(CONF_FUTURE_WEEKS, legacy_lookahead),
+            )
         )
         history_weeks = int(
-            self.config_entry.options.get(CONF_HISTORY_WEEKS, DEFAULT_HISTORY_WEEKS)
+            self.config_entry.options.get(
+                CONF_HISTORY_WEEKS,
+                self.config_entry.data.get(CONF_HISTORY_WEEKS, DEFAULT_HISTORY_WEEKS),
+            )
         )
         today = dt_util.now().date()
         week_start = _start_of_current_week()
@@ -541,10 +595,31 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
         cache_store = getattr(self, "_cache", None)
         cache = await cache_store.async_load() if cache_store else KretaCacheSnapshot()
         lessons_fetch_start = (
-            history_start if not cache.lessons else max(history_start, today - timedelta(days=7))
+            history_start
+            if cache.lessons_covered_from is None or history_start < cache.lessons_covered_from
+            else max(history_start, today - timedelta(days=7))
         )
-        history_fetch_start = (
-            history_start if not cache.grades else max(history_start, today - timedelta(days=14))
+        grades_fetch_start = (
+            history_start
+            if cache.grades_covered_from is None or history_start < cache.grades_covered_from
+            else max(history_start, today - timedelta(days=14))
+        )
+        absences_fetch_start = (
+            history_start
+            if cache.absences_covered_from is None or history_start < cache.absences_covered_from
+            else max(history_start, today - timedelta(days=14))
+        )
+        lesson_windows = _future_windows(
+            lessons_fetch_start,
+            week_end,
+            cache.lessons_covered_until,
+            today + timedelta(days=14),
+        )
+        test_windows = _future_windows(
+            today, week_end, cache.tests_covered_until, today + timedelta(days=14)
+        )
+        homework_windows = _future_windows(
+            today, week_end, cache.homework_covered_until, today + timedelta(days=14)
         )
         school_year_due = (
             cache.school_year_updated_at is None
@@ -558,21 +633,21 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 self.client.async_get_student_profile(),
             )
             fresh_lessons = (
-                await self._async_optional_api_operation(
+                await self._async_fetch_windows(
                     "lessons",
-                    "GET",
                     api_url(institution, "Sajat/OrarendElemek"),
-                    self.client.async_get_lessons(lessons_fetch_start, week_end),
+                    lesson_windows,
+                    self.client.async_get_lessons,
                 )
                 if self._enabled(CONF_TIMETABLE)
                 else []
             )
             fresh_tests = (
-                await self._async_optional_api_operation(
+                await self._async_fetch_windows(
                     "announced_tests",
-                    "GET",
                     api_url(institution, "Sajat/BejelentettSzamonkeresek"),
-                    self.client.async_get_announced_tests(today, week_end),
+                    test_windows,
+                    self.client.async_get_announced_tests,
                 )
                 if self._enabled(CONF_TESTS)
                 else []
@@ -582,17 +657,17 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                     "grades",
                     "GET",
                     api_url(institution, "Sajat/Ertekelesek"),
-                    self.client.async_get_grades(history_fetch_start, today),
+                    self.client.async_get_grades(grades_fetch_start, today),
                 )
                 if self._enabled(CONF_GRADES)
                 else []
             )
             fresh_homework = (
-                await self._async_optional_api_operation(
+                await self._async_fetch_windows(
                     "homework",
-                    "GET",
                     api_url(institution, "Sajat/HaziFeladatok"),
-                    self.client.async_get_homework(today, week_end),
+                    homework_windows,
+                    self.client.async_get_homework,
                 )
                 if self._enabled(CONF_HOMEWORK)
                 else []
@@ -602,7 +677,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                     "absences",
                     "GET",
                     api_url(institution, "Sajat/Mulasztasok"),
-                    self.client.async_get_absences(history_fetch_start, today),
+                    self.client.async_get_absences(absences_fetch_start, today),
                 )
                 if self._enabled(CONF_ABSENCES)
                 else []
@@ -644,26 +719,22 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             (
                 cache.lessons
                 if "lessons" in self.degraded_operations
-                else _merge_window(
+                else _merge_fetched_windows(
                     "lessons",
                     cache.lessons,
                     fresh_lessons,
-                    lessons_fetch_start,
-                    week_end,
                     history_start,
                     week_end,
                 )
             )
-            if self._enabled(CONF_SCHOOL_YEAR)
+            if self._enabled(CONF_TIMETABLE)
             else []
         )
         tests = (
             (
                 cache.tests
                 if "announced_tests" in self.degraded_operations
-                else _merge_window(
-                    "tests", cache.tests, fresh_tests, today, week_end, history_start, week_end
-                )
+                else _merge_fetched_windows("tests", cache.tests, fresh_tests, today, week_end)
             )
             if self._enabled(CONF_TESTS)
             else []
@@ -676,7 +747,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                     "grades",
                     cache.grades,
                     fresh_grades,
-                    history_fetch_start,
+                    grades_fetch_start,
                     today,
                     history_start,
                     today,
@@ -689,13 +760,11 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             (
                 cache.homework
                 if "homework" in self.degraded_operations
-                else _merge_window(
+                else _merge_fetched_windows(
                     "homework",
                     cache.homework,
                     fresh_homework,
                     today,
-                    week_end,
-                    history_start,
                     week_end,
                 )
             )
@@ -710,7 +779,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                     "absences",
                     cache.absences,
                     fresh_absences,
-                    history_fetch_start,
+                    absences_fetch_start,
                     today,
                     history_start,
                     today,
@@ -730,11 +799,34 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 if "school_year_calendar" in self.degraded_operations
                 else fresh_school_year
             )
-            if self._enabled(CONF_TIMETABLE)
+            if self._enabled(CONF_SCHOOL_YEAR)
             else []
         )
-        current_fresh_lessons = fresh_lessons if "lessons" not in self.degraded_operations else []
-        changes = detect_timetable_changes(cache.lessons, current_fresh_lessons)
+        current_fresh_lessons = (
+            [item for _start, _end, records in fresh_lessons for item in records]
+            if "lessons" not in self.degraded_operations
+            else []
+        )
+        detected_changes = detect_timetable_changes(cache.lessons, current_fresh_lessons)
+        retained_changes = [
+            item for item in cache.changes if item.start.date() >= today - timedelta(days=30)
+        ]
+        change_keys = {
+            (item.lesson_uid, item.change_type, item.start, item.old_value, item.new_value)
+            for item in retained_changes
+        }
+        for change in detected_changes:
+            key = (
+                change.lesson_uid,
+                change.change_type,
+                change.start,
+                change.old_value,
+                change.new_value,
+            )
+            if key not in change_keys:
+                retained_changes.append(change)
+                change_keys.add(key)
+        changes = retained_changes[-200:]
         events = merge_lessons_and_tests(lessons, tests)
         if self.config_entry.options.get(CONF_AUTOMATION_EVENTS, True):
             new_counts = {
@@ -743,7 +835,7 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
                 "tests": await self._emit_new("tests", tests, EVENT_NEW_TEST),
                 "absences": await self._emit_new("absences", absences, EVENT_NEW_ABSENCE),
                 "messages": await self._emit_new("messages", messages, EVENT_NEW_MESSAGE),
-                "timetable": await self._emit_timetable_changes(changes),
+                "timetable": await self._emit_timetable_changes(detected_changes),
             }
         else:
             new_counts = {
@@ -759,10 +851,57 @@ class KretaDataUpdateCoordinator(DataUpdateCoordinator[KretaCoordinatorData]):
             absences=absences,
             messages=messages,
             school_year=school_year,
+            changes=changes,
             school_year_updated_at=(
                 dt_util.utcnow()
-                if school_year_due and "school_year_calendar" not in self.degraded_operations
+                if self._enabled(CONF_SCHOOL_YEAR)
+                and school_year_due
+                and "school_year_calendar" not in self.degraded_operations
                 else cache.school_year_updated_at
+                if self._enabled(CONF_SCHOOL_YEAR)
+                else None
+            ),
+            lessons_covered_from=(
+                history_start
+                if self._enabled(CONF_TIMETABLE) and "lessons" not in self.degraded_operations
+                else cache.lessons_covered_from
+                if self._enabled(CONF_TIMETABLE)
+                else None
+            ),
+            lessons_covered_until=(
+                week_end
+                if self._enabled(CONF_TIMETABLE) and "lessons" not in self.degraded_operations
+                else cache.lessons_covered_until
+                if self._enabled(CONF_TIMETABLE)
+                else None
+            ),
+            grades_covered_from=(
+                history_start
+                if self._enabled(CONF_GRADES) and "grades" not in self.degraded_operations
+                else cache.grades_covered_from
+                if self._enabled(CONF_GRADES)
+                else None
+            ),
+            absences_covered_from=(
+                history_start
+                if self._enabled(CONF_ABSENCES) and "absences" not in self.degraded_operations
+                else cache.absences_covered_from
+                if self._enabled(CONF_ABSENCES)
+                else None
+            ),
+            tests_covered_until=(
+                week_end
+                if self._enabled(CONF_TESTS) and "announced_tests" not in self.degraded_operations
+                else cache.tests_covered_until
+                if self._enabled(CONF_TESTS)
+                else None
+            ),
+            homework_covered_until=(
+                week_end
+                if self._enabled(CONF_HOMEWORK) and "homework" not in self.degraded_operations
+                else cache.homework_covered_until
+                if self._enabled(CONF_HOMEWORK)
+                else None
             ),
         )
         if cache_store:

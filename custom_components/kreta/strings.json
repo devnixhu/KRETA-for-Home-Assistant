@@ -92,6 +92,24 @@
       "justified_absences": {"name": "Igazolt hiányzások"},
       "unjustified_absences": {"name": "Igazolatlan hiányzások"},
       "pending_absences": {"name": "Igazolásra váró hiányzások"}
+      ,"latest_grade": {"name": "Legutóbbi jegy"}
+      ,"previous_grade": {"name": "Előző jegy"}
+      ,"grade_average": {"name": "Tanulmányi átlag"}
+      ,"new_grades": {"name": "Új jegyek"}
+      ,"upcoming_homework": {"name": "Közelgő házi feladatok"}
+      ,"next_test": {"name": "Következő dolgozat"}
+      ,"tests_this_week": {"name": "E heti dolgozatok"}
+      ,"unread_messages": {"name": "Olvasatlan üzenetek"}
+      ,"latest_message": {"name": "Legutóbbi üzenet"}
+      ,"absences": {"name": "Hiányzások"}
+      ,"late_arrivals": {"name": "Késések"}
+      ,"school_status": {"name": "Iskolai állapot", "state": {"no_school": "Nincs tanítás", "before_school": "Tanítás előtt", "after_school": "Tanítás után", "lesson": "Órán", "break": "Szünet"}}
+      ,"today_summary": {"name": "Mai összefoglaló"}
+      ,"tomorrow_summary": {"name": "Holnapi összefoglaló"}
+      ,"week_summary": {"name": "Heti összefoglaló"}
+      ,"next_school_year_event": {"name": "Következő tanévi esemény"}
+      ,"last_refresh": {"name": "Utolsó frissítés"}
+      ,"connection_status": {"name": "Kapcsolat állapota", "state": {"ok": "Rendben", "authentication_required": "Újrahitelesítés szükséges", "temporarily_unavailable": "Átmenetileg nem érhető el", "rate_limited": "Lekéréskorlátozás", "partial_data": "Részleges adatok", "error": "Hiba"}}
     },
     "binary_sensor": {
       "school_day": {"name": "Ma tanítási nap"},
@@ -107,7 +125,9 @@
       "schedule_changed": {"name": "Órarend változott"},
       "substitution_today": {"name": "Mai helyettesítés"},
       "substitution_tomorrow": {"name": "Holnapi helyettesítés"}
-    }
+    },
+    "button": {"refresh": {"name": "Frissítés"}},
+    "calendar": {"timetable": {"name": "Órarend"}}
   },
   "device_automation": {
     "trigger_type": {

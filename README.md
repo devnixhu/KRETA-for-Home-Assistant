@@ -1,554 +1,147 @@
-# KRÉTA for Home Assistant
+# KRÉTA kliens Home Assistanthoz
 
-<p align="center">
-  <strong>KRÉTA-adatok a Home Assistantban, egyszerűen és automatizálhatóan.</strong>
-</p>
-
-<p align="center">
-  <a href="https://www.home-assistant.io/">
-    <img alt="Home Assistant" src="https://img.shields.io/badge/Home%20Assistant-Custom%20Integration-41BDF5?logo=homeassistant&logoColor=white">
-  </a>
-  <a href="https://hacs.xyz/">
-    <img alt="HACS" src="https://img.shields.io/badge/HACS-Custom%20Repository-41BDF5">
-  </a>
-  <a href="./LICENSE">
-    <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-green.svg">
-  </a>
-  <img alt="KRÉTA Unofficial" src="https://img.shields.io/badge/KR%C3%89TA-Unofficial-orange">
-</p>
-
-<p align="center">
-  <a href="#mi-ez">Mi ez?</a> •
-  <a href="#főbb-funkciók">Funkciók</a> •
-  <a href="#telepítés">Telepítés</a> •
-  <a href="#beállítás">Beállítás</a> •
-  <a href="#biztonság-és-adatvédelem">Biztonság</a> •
-  <a href="#licenc-és-eredeti-projekt">Licenc</a>
-</p>
-
----
+Nem hivatalos, közösségi Home Assistant-integráció, amely egy reszponzív KRÉTA-kliensfelületet, automatizálható eseményeket, naptárakat és háttér-entitásokat biztosít.
 
 > [!IMPORTANT]
-> **Ez egy NEM hivatalos, közösségi Home Assistant-integráció.**
->
-> A projekt NEM áll kapcsolatban a KRÉTA rendszer fejlesztőjével vagy üzemeltetőjével, továbbá NEM hivatalos Home Assistant- vagy HACS-projekt.
->
-> A KRÉTA hivatalos tájékoztatása szerint a tanulói alkalmazások által használt API-k nem nyilvánosak, és használatukat a hivatalos KRÉTA-alkalmazások számára tartják fenn. Emiatt az integráció működése bármikor megváltozhat vagy megszűnhet.
->
-> A projekt használata saját felelősségre történik.
+> A projekt nem áll kapcsolatban a KRÉTA vagy a Home Assistant fejlesztőivel. A KRÉTA által használt, nem nyilvános mobil API-k előzetes értesítés nélkül változhatnak. A használat saját felelősségre történik.
 
----
+## Mit nyújt?
 
-## Mi ez?
+Az elsődleges kezelőfelület a beépített `custom:kreta-dashboard-card`. Ez nem egyetlen nagy JSON-szenzort jelenít meg, hanem közvetlenül az integráció normalizált, helyi gyorsítótárából kérdezi le az adatokat.
 
-A **KRÉTA for Home Assistant** egy közösségi custom integration, amely a KRÉTA rendszerből elérhető egyes tanulói információkat teszi használhatóvá a Home Assistantban.
+A kliens nézetei:
 
-A cél, hogy a napi iskolai információk egy helyen, automatizálható formában jelenjenek meg:
+- áttekintés az aktuális és következő órával
+- mai, holnapi és heti órarend
+- jegyek kereséssel, tantárgyszűréssel, dátumszűréssel, rendezéssel és lapozással
+- dolgozatok és házi feladatok
+- órarendváltozások, helyettesítések és elmaradt órák
+- hiányzások
+- tanévi események
+- több KRÉTA-fiók grafikus kiválasztása
+- asztali oldalsáv és mobil, érintésbarát navigáció
+- magyar és angol felület, Home Assistant-téma támogatással
 
-- Home Assistant-dashboardokon
-- naptárnézetben
-- automatizálásokban
-- mobilértesítésekben
-- WallPanelen
-- más otthoni információs kijelzőkön
-
-A projekt a [`majorcs/kreta-homeassistant`](https://github.com/majorcs/kreta-homeassistant) nyílt forráskódú projektjén alapul, és annak továbbfejlesztett változata.
-
----
-
-## Főbb funkciók
-
-A jelenlegi verzió az upstream projekt funkcióira épül.
-
-### Órarend és naptár
-
-- **Órarend** megjelenítése Home Assistant-naptárként
-- **Bejelentett számonkérések** megjelenítése az órarend mellett vagy külön naptári eseményként
-- gépileg feldolgozható **JSON-szenzor** órarendi és számonkérési adatokhoz
-- **bináris szenzorok** a mai és holnapi tanítási, illetve számonkérési naphoz
-- tanév rendjének kezelése
-
-### Jegyek és tanulmányi adatok
-
-- **érdemjegyek kezelése**
-- érdemjegyekhez kapcsolódó JSON-adatok
-- új értékelések követésének lehetősége
-- tanulói profiladatok megjelenítése, ha azokat a KRÉTA visszaadja
-
-### Házi feladatok
-
-- **házi feladatok kezelése**
-- közelgő házi feladatok követése
-- gépileg feldolgozható adatok automatizálásokhoz
-
-### Diagnosztika és frissítés
-
-- **Utolsó frissítés** diagnosztikai szenzor
-- **Frissítési állapot** szenzor az adatlekérés állapotával
-- **kézi azonnali frissítés**
-- **automatikus időzített frissítés**
-- konfigurálható frissítési időköz
-
-### Több fiók
-
-- **több tanuló / KRÉTA-fiók** kezelése
-- minden tanuló külön integrációs példányként használható
-
-> [!NOTE]
-> Egyes részletes vagy JSON-alapú entitások alapértelmezésben kikapcsolva lehetnek.
->
-> Az elérhető funkciók a KRÉTA rendszer és az integráció verziójának változásával eltérhetnek.
-
----
+A Home Assistant-entitások megmaradnak háttér- és automatizálási felületként. Ide tartozik többek között az aktuális és következő óra, az iskolai állapot, az órarendi naptár, a frissítés gombja, az összesítők és az opcionális részletes entitások.
 
 ## Telepítés
 
-### HACS használatával
+### HACS
 
-1. Nyisd meg a **HACS** felületet a Home Assistantban.
-2. Menj az **Integrations** részhez.
-3. Nyisd meg az egyedi repositoryk hozzáadására szolgáló menüpontot.
-4. Add hozzá ezt a repositoryt:
-
-```text
-https://github.com/devnixhu/KRETA-for-Home-Assistant
-```
-
-5. Típusnak válaszd az **Integration** lehetőséget.
-6. Telepítsd a **KRÉTA for Home Assistant** integrációt.
-7. Indítsd újra a Home Assistantot, ha erre a rendszer figyelmeztet.
-
----
+1. A HACS Integrations részében adj hozzá egy egyedi repositoryt.
+2. Repository: `https://github.com/devnixhu/KRETA-for-Home-Assistant`
+3. Típus: Integration
+4. Telepítés után indítsd újra a Home Assistantot.
+5. A Beállítások → Eszközök és szolgáltatások oldalon add hozzá a KRÉTA-integrációt.
 
 ### Kézi telepítés
 
-1. Töltsd le a repository legfrissebb verzióját.
-2. Másold a:
+Másold a `custom_components/kreta` könyvtárat a Home Assistant `/config/custom_components/kreta` útvonalára, majd indítsd újra a Home Assistantot.
 
-```text
-custom_components/kreta
+## Bejelentkezés és 2FA
+
+1. Add meg az intézményi azonosítót.
+2. A Home Assistant egy rövid élettartamú, aláírt helyi indítócímen keresztül megnyitja a hivatalos KRÉTA bejelentkezési oldalt.
+3. A felhasználónevet, jelszót és szükség esetén az egyszer használatos 2FA-kódot kizárólag a KRÉTA oldalán add meg.
+4. A sikeres belépés végén másold vissza a teljes visszatérési URL-t a Home Assistant űrlapjára.
+
+Az integráció ugyanahhoz a mobil OAuth-klienshez tartozó `client_id`, visszatérési útvonal és PKCE-adatok konzisztenciáját ellenőrzi. Nem keveri ezt az EduID/KIFU folyamattal. A hálózati engedélylista, a TLS-ellenőrzés, a callback hostja, útvonala és `state` értéke fail-closed módon érvényesül.
+
+A jelszó és a 2FA-kód nem kerül a Home Assistantba, nem kerül tárolásra és nem kerül naplózásra. Az OAuth-kód, tokenek, cookie-k és Authorization headerek szintén ki vannak zárva a naplókból és a diagnosztikából.
+
+## A KRÉTA-kliens hozzáadása
+
+Az integráció a klienskártya JavaScript-erőforrását automatikusan regisztrálja. A dashboard szerkesztőjében keresd a **KRÉTA kliens** kártyát, vagy használd ezt a minimális YAML-konfigurációt:
+
+```yaml
+type: custom:kreta-dashboard-card
+view: overview
 ```
 
-mappát a Home Assistant konfigurációs könyvtárának:
+Ha csak egy KRÉTA-fiók van beállítva, a kártya automatikusan kiválasztja. Több fióknál a grafikus kártyaszerkesztőben választható ki a tanuló. Ugyanott állítható a kezdőnézet, a megjelenített adatok, az időformátum, a sűrűség, a heti és mobil elrendezés, valamint a kiemelőszín.
 
-```text
-custom_components
-```
+## Adatfrissítés és gyorsítótár
 
-mappájába.
+- A koordinátor az egyes KRÉTA-adatcsoportokat egymástól elkülönítve frissíti.
+- Egy opcionális végpont hibája nem teszi használhatatlanná a már elérhető adatokat.
+- A lekérések dátumtartományai korlátozott darabokra vannak bontva.
+- A közeljövő gyakran frissül, a távoli jövő csak a még nem lefedett tartományban töltődik le.
+- A helyi gyorsítótár fiókonként elkülönül, normalizált adatokat tartalmaz, és hálózati hiba esetén biztonságos visszaesést ad.
+- A kézi módhoz a frissítési időköz `0` percre állítható.
+- Az előzmény- és jövőtartomány legfeljebb 52 hétre állítható.
 
-A végeredmény például így nézzen ki:
+## Automatizálások
 
-```text
-/config/
-└── custom_components/
-    └── kreta/
-        ├── __init__.py
-        ├── manifest.json
-        ├── config_flow.py
-        └── ...
-```
+Az integráció eszközindítókat biztosít új jegyhez, új házi feladathoz, új dolgozathoz, órarendváltozáshoz, helyettesítéshez, óra kezdetéhez és végéhez, valamint a tanítási nap végéhez.
 
-3. Indítsd újra a Home Assistantot.
-4. Add hozzá az integrációt a Home Assistant felületén.
+Elérhető események többek között:
 
----
+- `kreta_new_grade`
+- `kreta_new_homework`
+- `kreta_new_message`
+- `kreta_new_absence`
+- `kreta_new_test`
+- `kreta_timetable_change`
+- `kreta_substitution`
+- `kreta_lesson_cancelled`
+- `kreta_room_changed`
+- `kreta_teacher_changed`
+- `kreta_lesson_started`
+- `kreta_lesson_finished`
+- `kreta_break_started`
+- `kreta_school_started`
+- `kreta_school_finished`
 
-## Beállítás
+Az eseményadatok csak a működéshez szükséges, normalizált mezőket tartalmazzák. A nyers KRÉTA-válasz nem kerül továbbításra.
 
-1. Nyisd meg a:
+Szolgáltatások:
 
-   **Beállítások → Eszközök és szolgáltatások**
-
-   oldalt.
-
-2. Válaszd az **Integráció hozzáadása** lehetőséget.
-
-3. Keresd meg a **KRÉTA** integrációt.
-
-4. Add meg az intézményi azonosítót és a frissítési beállításokat.
-5. A Home Assistant egy új böngészőlapon megnyitja a hivatalos KRÉTA bejelentkezési oldalt.
-6. A KRÉTA oldalán végezd el a jelszavas és szükség esetén a kétlépcsős azonosítást.
-7. Másold vissza a Home Assistantba a böngészőben megnyitott teljes végső visszatérési URL-t.
-
-A böngésző először egy öt percig érvényes, Home Assistant által aláírt és egyszer használható helyi indító URL-t nyit meg, amely csak ellenőrzött KRÉTA-címre irányíthat át. A Home Assistant nem kapja meg a KRÉTA-felhasználónevet, a jelszót vagy a kétlépcsős azonosítási kódot. A visszatérési URL egyszer használható OAuth-kódját PKCE védi, és az integráció ellenőrzi a hostot, az útvonalat és a bejelentkezési kísérlethez tartozó `state` értéket.
-
-Több KRÉTA-fiók külön integrációs példányként adható hozzá.
-
----
-
-## Használat
-
-Az integráció telepítése után az elérhető adatok Home Assistant-entitásokként és naptári eseményekként jelennek meg.
-
-### Tipikus felhasználás
-
-- aktuális tanóra megjelenítése
-- következő tanóra megjelenítése
-- napi órarend megjelenítése
-- számonkérések követése
-- iskolai események követése
-- érdemjegyek feldolgozása
-- házi feladatok követése
-- dashboardok készítése
-- Home Assistant-automatizálások indítása
-- mobilértesítések létrehozása
-- WallPanel-értesítések létrehozása
-
----
-
-## WallPanel és értesítések
-
-A KRÉTA-integrációt érdemes **adatforrásként** használni, az értesítéseket pedig a Home Assistanton keresztül kezelni.
-
-### Javasolt felépítés
-
-```text
-KRÉTA
-  │
-  ▼
-KRÉTA for Home Assistant
-  │
-  ▼
-Home Assistant
-  │
-  ├── Dashboard
-  ├── Automation
-  ├── Mobile notification
-  └── WallPanel
-```
-
-Így a WallPanelnek nincs szüksége:
-
-- közvetlen KRÉTA-hozzáférésre
-- KRÉTA-felhasználónévre
-- KRÉTA-jelszóra
-- KRÉTA-tokenekre
-
-A WallPanel csak a Home Assistant által már feldolgozott információkat jeleníti meg.
-
----
-
-## Példa automatizálási lehetőségek
-
-A Home Assistant segítségével például ilyen automatizálások készíthetők:
-
-### Új jegy
-
-```text
-Új KRÉTA-értékelés
-        │
-        ▼
-Home Assistant
-        │
-        ├── telefonos értesítés
-        ├── WallPanel popup
-        └── dashboard frissítés
-```
-
-### Következő óra
-
-Például egy dashboardon:
-
-```text
-Következő óra
-
-INFORMATIKA
-09:55 – 10:40
-214-es terem
-```
-
-### Reggeli összefoglaló
-
-Például:
-
-```text
-Mai nap
-
-6 tanóra
-Első óra: Matematika
-Utolsó óra: Angol
-
-1 számonkérés
-2 házi feladat
-```
-
-> [!NOTE]
-> Az itt bemutatott automatizálási példák nem feltétlenül érhetők el alapértelmezésben a jelenlegi verzióban.
-
----
+- `kreta.refresh`
+- `kreta.get_day`
+- `kreta.get_week`
+- `kreta.get_grades`
+- `kreta.get_tests`
+- `kreta.get_homework`
 
 ## Biztonság és adatvédelem
 
-A KRÉTA-fiók tanulmányi és személyes adatokat tartalmaz, ezért a hitelesítési adatokat különösen érzékeny információként kell kezelni.
+- szigorú host-, útvonal- és redirect-engedélylista
+- kötelező TLS-tanúsítvány-ellenőrzés
+- OAuth Authorization Code + PKCE
+- fiókonként elkülönített token- és adatgyorsítótár
+- jelszó és 2FA-kód tartós tárolása nélkül
+- tokenek, kódok, cookie-k, hitelesítési fejlécek és személyes profiladatok naplózása nélkül
+- adatcsoportonkénti, személyes adatot nem tartalmazó hibadiagnosztika
+- korlátozott WebSocket-lekérdezések és válaszméretek
 
-### Ajánlott
+A működéshez szükséges OAuth-tokeneket a Home Assistant saját `.storage` rendszerében kezeli az integráció. A `.storage` könyvtárat soha ne oszd meg és ne tedd közzé.
 
-- csak saját vagy jogszerűen kezelt KRÉTA-fiókot használj
-- soha ne tölts fel valódi jelszót GitHubra
-- soha ne tölts fel access vagy refresh tokent GitHubra
-- ne tölts fel Home Assistant `.storage` fájlokat
-- ne oszd meg a `.storage` könyvtár tartalmát
-- ne tegyél valódi KRÉTA API-válaszokat publikus issue-ba
-- ne tegyél személyes adatokat logpéldákba
-- publikus hibajegyek előtt anonimizáld a logokat
-- tartsd naprakészen a Home Assistantot
-- tartsd naprakészen az integrációt
+## Hibakeresés
 
-> [!WARNING]
-> A custom integration a Home Assistant folyamatán belül fut.
->
-> Csak olyan verziót telepíts, amelynek a forráskódjában megbízol.
+Ha a beállítás „KRÉTA data update failed” hibával áll meg, az anonimizált naplóban keresd a `KRÉTA API operation failed` bejegyzést. Ez tartalmazhatja a művelet nevét, HTTP-metódust, engedélyezett hostot és útvonalat, státuszkódot, kivételosztályt és rövid, tisztított leírást. Hitelesítési adatok vagy tanulói személyes adatok nem jelenhetnek meg benne.
 
----
+Hibajegyhez add meg a Home Assistant és az integráció verzióját, a reprodukálás lépéseit és csak anonimizált naplórészletet. Soha ne küldj jelszót, 2FA-kódot, tokent, callback URL-t, oktatási azonosítót, cookie-t vagy `.storage` fájlt.
 
-## Adatkezelési alapelvek
-
-A projekt célja, hogy a lehető legkevesebb érzékeny adatot kezelje és tárolja.
-
-A tervezett alapelvek:
-
-- minimális adattárolás
-- csak szükséges adatok lekérése
-- lehetőség szerint csak read-only hozzáférés
-- kizárólag a futáshoz szükséges refresh token tartós tárolása
-- érzékeny adatok kizárása a logokból
-- érzékeny adatok kizárása a diagnosztikából
-- nyers KRÉTA-válaszok tárolásának kerülése
-- harmadik félnek történő adattovábbítás kerülése
-
----
-
-## Projektirány
-
-A fork fejlesztési célja egy egyszerűbben auditálható, **privacy- és security-first** KRÉTA-integráció kialakítása.
-
-### Tervezett fejlesztési irányok
-
-- minimális adattárolás
-- hitelesítési adatok biztonságosabb kezelése
-- érzékeny adatok kizárása a logokból
-- érzékeny adatok kizárása a diagnosztikából
-- kizárólag szükséges KRÉTA-végpontok használata
-- jobb hálózati request-kezelés
-- biztonságosabb tokenkezelés
-- natív Home Assistant-eventek
-- új jegy esemény
-- új üzenet esemény
-- új házi feladat esemény
-- órarendváltozás esemény
-- aktuális tanóra szenzor
-- következő tanóra szenzor
-- mai órák összefoglalója
-- holnapi órák összefoglalója
-- WallPanel-barát automatizálási példák
-- jobb diagnosztika
-- jobb hibakezelés
-- részletes security dokumentáció
-- részletes privacy dokumentáció
-- automatizált security tesztek
-
-> [!NOTE]
-> A felsorolt tervezett funkciók nem feltétlenül érhetők el a jelenlegi kiadásban.
-
----
-
-## Tervezett architektúra
-
-A projekt fejlesztési iránya szerint a KRÉTA-hozzáférést érdemes különválasztani a Home Assistant többi funkciójától.
-
-```text
-                    KRÉTA
-                      │
-                      │ HTTPS
-                      ▼
-              KRÉTA API kliens
-                      │
-                      ▼
-             Home Assistant
-             Data Coordinator
-                      │
-          ┌───────────┼───────────┐
-          │           │           │
-          ▼           ▼           ▼
-       Sensors      Calendar     Events
-          │           │           │
-          └───────────┼───────────┘
-                      │
-                      ▼
-              Home Assistant
-               Automations
-                      │
-          ┌───────────┼───────────┐
-          │           │           │
-          ▼           ▼           ▼
-       WallPanel    Mobile      Dashboard
-```
-
-Így maga a KRÉTA-integráció nem szükséges, hogy közvetlenül kommunikáljon WallPanellel vagy más külső megjelenítővel.
-
----
-
-## Fejlesztés és tesztelés
-
-A projekt módosítása után futtasd a teszteket, mielőtt kiadást készítesz.
-
-### Függőségek telepítése
+## Fejlesztés és ellenőrzés
 
 ```bash
 python -m pip install -r requirements-dev.txt -r requirements-ha.txt
-```
-
-### Tesztek futtatása
-
-```bash
 pytest
+ruff check .
+ruff format --check .
 ```
 
-### Ajánlott ellenőrzések
+A repository CI-je HACS validation és Home Assistant hassfest ellenőrzést is futtat.
 
-A repository CI-je számára ajánlott legalább:
+## Korlátok
 
-- Python-tesztek
-- HACS validation
-- Home Assistant `hassfest`
-- lint
-- statikus kódelemzés
-- secret scanning
-- security tesztek
-- dependency audit
+- Ez nem hivatalos kliens, ezért a KRÉTA szerveroldali változásai megszakíthatják a működést.
+- A valódi KRÉTA-fiókos működés csak élő fiókkal és élő szerverválaszokkal igazolható teljesen.
+- A böngészős OAuth-visszatérés jelenleg kézi URL-visszamásolást használ, mert a mobil OAuth-kliens rögzített callback címe nem a Home Assistant címe.
+- Az integráció olvasási és automatizálási célú; nem helyettesíti a hivatalos KRÉTA alkalmazás minden funkcióját.
 
----
+## Licenc és eredet
 
-## Hibabejelentés
+A projekt a [`majorcs/kreta-homeassistant`](https://github.com/majorcs/kreta-homeassistant) MIT-licencű projektjéből indult. A licenc- és szerzői jogi értesítések a [LICENSE](LICENSE) fájlban találhatók.
 
-Hiba jelentésekor kérlek:
-
-1. írd le a Home Assistant verzióját
-2. írd le az integráció verzióját
-3. írd le a reprodukálás pontos lépéseit
-4. csak anonimizált logot csatolj
-
-### Soha ne küldj
-
-- KRÉTA-jelszót
-- access tokent
-- refresh tokent
-- Authorization headert
-- session cookie-t
-- oktatási azonosítót
-- teljes személyes profilt
-- más személyek adatait
-- teljes `.storage` fájlt
-- valódi KRÉTA API-response dumpot
-
-Ha nem vagy biztos abban, hogy egy log biztonságosan publikálható, előbb anonimizáld.
-
----
-
-## Jogi megjegyzés
-
-Ez a projekt **közösségi és nem hivatalos**.
-
-A **KRÉTA** név, rendszer, szolgáltatások, arculati elemek és esetleges védjegyek a megfelelő jogosultak tulajdonában állnak.
-
-A név ebben a repositoryban kizárólag a kompatibilitás és a projekt céljának leírására szolgál.
-
-A KRÉTA hivatalos tudásbázisa szerint a mobilalkalmazások által használt API-k nem nyilvánosak, és azok használatára a hivatalos KRÉTA-alkalmazások jogosultak.
-
-Ez a repository:
-
-- nem jelent hivatalos KRÉTA-támogatást
-- nem jelent hivatalos API-hozzáférési engedélyt
-- nem kapcsolódik hivatalosan a KRÉTA fejlesztőihez
-- nem kapcsolódik hivatalosan a KRÉTA üzemeltetőihez
-
-A projekt nem hozzáférés-védelem megkerülésére vagy jogosulatlan fiókhasználatra készült.
-
----
-
-## Licenc és eredeti projekt
-
-A projekt az MIT licenc alatt elérhető upstream kódra épül.
-
-### Eredeti projekt
-
-[`majorcs/kreta-homeassistant`](https://github.com/majorcs/kreta-homeassistant)
-
-### Eredeti szerző
-
-**Csaba Major**
-
-### Upstream licenc
-
-**MIT License**
-
-Az eredeti MIT copyright- és licencértesítést meg kell őrizni az eredeti kódot vagy annak lényeges részeit tartalmazó terjesztésekben.
-
-A fork új módosításai és fejlesztései ugyanazon repository licencfeltételei szerint kerülnek közzétételre, amennyiben a `LICENSE` fájl másként nem rendelkezik.
-
-> [!IMPORTANT]
-> Az upstream projektből származó kód szerzői jogi és licencinformációit ne távolítsd el.
-
----
-
-## Upstream
-
-Ez a repository a következő projektből indult:
-
-```text
-https://github.com/majorcs/kreta-homeassistant
-```
-
----
-
-## Felelősség kizárása
-
-A szoftver **garancia nélkül** kerül közzétételre.
-
-A KRÉTA rendszer:
-
-- API-ja
-- hitelesítési folyamata
-- adatstruktúrája
-- végpontjai
-- biztonsági követelményei
-
-előzetes értesítés nélkül megváltozhatnak.
-
-Emiatt az integráció folyamatos működése nem garantálható.
-
-A felhasználó felelőssége, hogy a projektet saját környezetében, saját jogosultságaival és a vonatkozó szabályoknak megfelelően használja.
-
----
-
-## Közreműködés
-
-Pull requestek, hibajavítások és ötletek szívesen fogadottak.
-
-Közreműködés előtt kérlek:
-
-- ne commitolj valódi KRÉTA-adatokat
-- ne commitolj valódi tokeneket
-- ne commitolj jelszavakat
-- használj anonimizált vagy szintetikus tesztadatokat
-- futtasd le a teszteket
-- tartsd szem előtt a privacy- és security-first irányelveket
-
----
-
-## Kapcsolódó projektek
-
-- [Home Assistant](https://www.home-assistant.io/)
-- [HACS](https://hacs.xyz/)
-- [majorcs/kreta-homeassistant](https://github.com/majorcs/kreta-homeassistant)
-
----
-
-<p align="center">
-  Made for the Home Assistant community.
-</p>
-
-<p align="center">
-  <strong>With love by Devnixhu</strong>
-</p>
+A KRÉTA név és a kapcsolódó védjegyek a jogosultjaik tulajdonában állnak; itt kizárólag a kompatibilitás leírására szolgálnak.

@@ -30,7 +30,7 @@ class KretaRefreshButton(KretaEntity, ButtonEntity):
     """A button that triggers an immediate data refresh."""
 
     _attr_icon = "mdi:refresh"
-    _attr_name = "Refresh"
+    _attr_translation_key = "refresh"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, entry: ConfigEntry, runtime_data: KretaRuntimeData) -> None:

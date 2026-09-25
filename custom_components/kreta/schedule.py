@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_point_in_utc_time
@@ -23,11 +23,17 @@ class KretaTransitionScheduler:
     """Maintain local one-shot transition callbacks for one account."""
 
     def __init__(
-        self, hass: HomeAssistant, entry_id: str, coordinator: KretaDataUpdateCoordinator
+        self,
+        hass: HomeAssistant,
+        entry_id: str,
+        coordinator: KretaDataUpdateCoordinator,
+        *,
+        emit_events: bool = True,
     ) -> None:
         self._hass = hass
         self._entry_id = entry_id
         self._coordinator = coordinator
+        self._emit_events = emit_events
         self._unsubscribers: list[Callable[[], None]] = []
 
     @callback
@@ -37,10 +43,14 @@ class KretaTransitionScheduler:
         if data is None:
             return
         now = dt_util.now()
+        horizon = now + timedelta(days=2)
         lessons = [
             item
             for item in data.events
-            if item.source != "exam_only" and not item.is_cancelled and item.end > now
+            if item.source != "exam_only"
+            and not item.is_cancelled
+            and item.end > now
+            and item.start < horizon
         ]
         days: dict[str, list] = {}
         for lesson in lessons:
@@ -60,18 +70,29 @@ class KretaTransitionScheduler:
 
         @callback
         def fire(_now: datetime) -> None:
-            self._hass.bus.async_fire(
-                event_type,
-                {
-                    "entry_id": self._entry_id,
-                    "subject": lesson.subject_name,
-                    "lesson_index": lesson.lesson_index,
-                    "time": moment.isoformat(),
-                },
-            )
+            if self._emit_events:
+                self._hass.bus.async_fire(
+                    event_type,
+                    {
+                        "entry_id": self._entry_id,
+                        "subject": lesson.subject_name,
+                        "lesson_index": lesson.lesson_index,
+                        "time": moment.isoformat(),
+                    },
+                )
 
         self._unsubscribers.append(
             async_track_point_in_utc_time(self._hass, fire, dt_util.as_utc(moment))
+        )
+
+        @callback
+        def update_entities(_now: datetime) -> None:
+            self._coordinator.async_update_listeners()
+
+        self._unsubscribers.append(
+            async_track_point_in_utc_time(
+                self._hass, update_entities, dt_util.as_utc(moment + timedelta(seconds=1))
+            )
         )
 
     @callback

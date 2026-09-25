@@ -138,7 +138,6 @@ class KretaConditionBinarySensor(KretaEntity, BinarySensorEntity):
     def __init__(self, entry, runtime_data, key, name, condition) -> None:
         super().__init__(entry, runtime_data)
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_name = name
         self._attr_translation_key = key
         self._condition = condition
         self._attr_entity_registry_enabled_default = key in {
@@ -168,7 +167,6 @@ class KretaDayBinarySensor(KretaEntity, BinarySensorEntity):
         """Initialize the binary sensor."""
         super().__init__(entry, runtime_data)
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_name = name
         self._attr_translation_key = key
         self._day_offset = day_offset
         self._event_kind = event_kind

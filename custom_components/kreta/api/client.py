@@ -65,6 +65,15 @@ def _date_chunks(start_date: date, end_date: date, days: int = 28) -> Iterator[t
         chunk_start = chunk_end + timedelta(days=1)
 
 
+def _reference_text(value: Any, field: str = "Nev") -> str | None:
+    if isinstance(value, dict):
+        selected = value.get(field)
+        return str(selected) if selected is not None else None
+    if isinstance(value, str):
+        return value
+    return None
+
+
 class KretaApiClient:
     """Kreta API client with refresh-token persistence."""
 
@@ -146,7 +155,7 @@ class KretaApiClient:
             for item in payload:
                 if not isinstance(item, dict):
                     continue
-                lesson_type = str((item.get("Tipus") or {}).get("Nev") or "")
+                lesson_type = _reference_text(item.get("Tipus")) or ""
                 if lesson_type not in {"TanitasiOra", "OrarendiOra"}:
                     continue
                 start_raw = item.get("KezdetIdopont")
@@ -154,15 +163,19 @@ class KretaApiClient:
                 if not isinstance(start_raw, str) or not isinstance(end_raw, str):
                     _LOGGER.warning("Skipping a lesson with missing time fields")
                     continue
-                start = self._parse_datetime(start_raw)
-                end = self._parse_datetime(end_raw)
-                subject = str(item.get("Nev") or (item.get("Tantargy") or {}).get("Nev") or "Óra")
+                try:
+                    start = self._parse_datetime(start_raw)
+                    end = self._parse_datetime(end_raw)
+                except ValueError:
+                    _LOGGER.warning("Skipping a lesson with invalid time fields")
+                    continue
+                subject = str(item.get("Nev") or _reference_text(item.get("Tantargy")) or "Óra")
                 room = item.get("TeremNeve")
                 lesson_index = item.get("Oraszam")
                 topic = item.get("Tema")
                 teacher = item.get("TanarNeve")
                 substitute = item.get("HelyettesTanarNeve")
-                state = str((item.get("Allapot") or {}).get("Nev") or "")
+                state = _reference_text(item.get("Allapot")) or ""
                 state_key = state.casefold()
                 uid = str(item.get("Uid") or "")
                 if not uid:
@@ -219,22 +232,30 @@ class KretaApiClient:
                 },
             )
             for item in payload:
+                if not isinstance(item, dict):
+                    continue
                 datum = item.get("Datum")
-                if datum is None:
+                if not isinstance(datum, str):
                     _LOGGER.warning("Skipping an announced test with a missing date")
                     continue
                 announced_date = item.get("BejelentesDatuma")
+                try:
+                    test_date = self._parse_local_date(datum)
+                    parsed_announced_date = (
+                        self._parse_local_date(announced_date) if announced_date else None
+                    )
+                except ValueError:
+                    _LOGGER.warning("Skipping an announced test with invalid date fields")
+                    continue
                 tests.append(
                     AnnouncedTest(
-                        test_date=self._parse_local_date(datum),
-                        announced_date=(
-                            self._parse_local_date(announced_date) if announced_date else None
-                        ),
+                        test_date=test_date,
+                        announced_date=parsed_announced_date,
                         subject_name=item.get("TantargyNeve") or "Ismeretlen tantargy",
                         teacher_name=item.get("RogzitoTanarNeve"),
                         lesson_index=item.get("OrarendiOraOraszama"),
                         theme=item.get("Temaja"),
-                        mode=item.get("Modja", {}).get("Leiras"),
+                        mode=_reference_text(item.get("Modja"), "Leiras"),
                         uid=str(item.get("Uid") or ""),
                     )
                 )
@@ -259,28 +280,37 @@ class KretaApiClient:
                 params={"datumTol": chunk_start.isoformat(), "datumIg": chunk_end.isoformat()},
             )
             for item in payload:
+                if not isinstance(item, dict):
+                    continue
                 recorded = item.get("RogzitesDatuma")
                 if not isinstance(recorded, str):
                     _LOGGER.warning("Skipping a grade with a missing date")
+                    continue
+                try:
+                    grade_date = self._parse_local_date(recorded)
+                    created_at = self._parse_datetime(recorded)
+                except ValueError:
+                    _LOGGER.warning("Skipping a grade with invalid date fields")
                     continue
                 numeric = item.get("SzamErtek")
                 weight = item.get("SulySzazalekErteke")
                 grades.append(
                     Grade(
-                        grade_date=self._parse_local_date(recorded),
-                        created_at=self._parse_datetime(recorded),
-                        subject_name=(item.get("Tantargy") or {}).get("Nev")
-                        or "Ismeretlen tantárgy",
-                        grade_type=(item.get("Tipus") or {}).get("Leiras"),
+                        grade_date=grade_date,
+                        created_at=created_at,
+                        subject_name=_reference_text(item.get("Tantargy")) or "Ismeretlen tantárgy",
+                        grade_type=_reference_text(item.get("Tipus"), "Leiras"),
                         value=item.get("SzovegesErtek"),
                         numeric_value=(
-                            float(numeric) if isinstance(numeric, (int, float)) else None
+                            float(numeric)
+                            if isinstance(numeric, (int, float)) and not isinstance(numeric, bool)
+                            else None
                         ),
                         weight_percentage=weight if isinstance(weight, int) else None,
                         teacher_name=item.get("ErtekeloTanarNeve"),
                         topic=item.get("Tema"),
-                        mode=(item.get("Mod") or {}).get("Leiras"),
-                        value_type=(item.get("ErtekFajta") or {}).get("Nev"),
+                        mode=_reference_text(item.get("Mod"), "Leiras"),
+                        value_type=_reference_text(item.get("ErtekFajta")),
                         uid=str(item.get("Uid") or ""),
                     )
                 )
@@ -298,17 +328,25 @@ class KretaApiClient:
                 params={"datumTol": chunk_start.isoformat(), "datumIg": chunk_end.isoformat()},
             )
             for item in payload:
+                if not isinstance(item, dict):
+                    continue
                 deadline = item.get("HataridoDatuma")
                 if not isinstance(deadline, str):
                     _LOGGER.warning("Skipping homework with a missing deadline")
                     continue
                 assigned = item.get("FeladasDatuma") or item.get("RogzitesIdopontja")
+                try:
+                    due_date = self._parse_local_date(deadline)
+                    assigned_date = self._parse_local_date(assigned) if assigned else None
+                except ValueError:
+                    _LOGGER.warning("Skipping homework with invalid date fields")
+                    continue
                 homework.append(
                     HomeworkItem(
                         subject_name=item.get("TantargyNeve") or "Ismeretlen tantárgy",
                         description=item.get("Szoveg"),
-                        due_date=self._parse_local_date(deadline),
-                        assigned_date=self._parse_local_date(assigned) if assigned else None,
+                        due_date=due_date,
+                        assigned_date=assigned_date,
                         uid=str(item.get("Uid") or ""),
                         teacher_name=item.get("RogzitoTanarNeve"),
                         is_done=(
@@ -333,16 +371,23 @@ class KretaApiClient:
         payload = await self._async_get_json("Sajat/Intezmenyek/TanevRendjeElemek")
         milestones: list[SchoolYearMilestone] = []
         for item in payload:
+            if not isinstance(item, dict):
+                continue
             event_date = item.get("Datum")
-            if event_date is None:
+            if not isinstance(event_date, str):
                 _LOGGER.warning("Skipping a school-year item with a missing date")
                 continue
-            naptipus = item.get("Naptipus", {})
+            try:
+                parsed_date = self._parse_local_date(event_date)
+            except ValueError:
+                _LOGGER.warning("Skipping a school-year item with an invalid date")
+                continue
+            naptipus = item.get("Naptipus")
             milestones.append(
                 SchoolYearMilestone(
-                    event_date=self._parse_local_date(event_date),
-                    day_type=naptipus.get("Nev"),
-                    description=naptipus.get("Leiras"),
+                    event_date=parsed_date,
+                    day_type=_reference_text(naptipus),
+                    description=naptipus.get("Leiras") if isinstance(naptipus, dict) else None,
                 )
             )
         milestones.sort(key=lambda milestone: milestone.event_date)
@@ -363,6 +408,11 @@ class KretaApiClient:
                 raw_date = item.get("Datum") or item.get("KezdetDatum")
                 if not isinstance(raw_date, str):
                     continue
+                try:
+                    parsed_date = self._parse_local_date(raw_date)
+                except ValueError:
+                    _LOGGER.warning("Skipping an absence with an invalid date")
+                    continue
                 raw_status = item.get("IgazolasAllapota")
                 status = (
                     raw_status.get("Nev") if isinstance(raw_status, dict) else raw_status
@@ -371,15 +421,15 @@ class KretaApiClient:
                 result.append(
                     Absence(
                         uid=str(item.get("Uid") or ""),
-                        absence_date=self._parse_local_date(raw_date),
+                        absence_date=parsed_date,
                         status=str(status),
-                        absence_type=str((item.get("Tipus") or {}).get("Nev") or "absence"),
+                        absence_type=_reference_text(item.get("Tipus")) or "absence",
                         minutes=(
                             item.get("KesesPercben")
                             if isinstance(item.get("KesesPercben"), int)
                             else None
                         ),
-                        subject_name=(item.get("Tantargy") or {}).get("Nev"),
+                        subject_name=_reference_text(item.get("Tantargy")),
                         teacher_name=item.get("RogzitoTanarNeve"),
                         lesson_index=(
                             lesson.get("Oraszam")

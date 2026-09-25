@@ -386,3 +386,16 @@ class TimetableChange:
         data = asdict(self)
         data["start"] = self.start.isoformat()
         return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TimetableChange:
+        """Restore a normalized timetable change from cache."""
+        return cls(
+            change_type=str(data["change_type"]),
+            lesson_uid=str(data["lesson_uid"]),
+            subject_name=data.get("subject_name"),
+            lesson_index=data.get("lesson_index"),
+            start=datetime.fromisoformat(data["start"]),
+            old_value=data.get("old_value"),
+            new_value=data.get("new_value"),
+        )

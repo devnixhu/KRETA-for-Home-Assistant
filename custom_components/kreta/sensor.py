@@ -9,6 +9,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from . import KretaRuntimeData
@@ -138,12 +139,22 @@ def _lesson_events(events: list[MergedCalendarEvent]) -> list[MergedCalendarEven
 
 def _current_lesson(events: list[MergedCalendarEvent]) -> MergedCalendarEvent | None:
     now = dt_util.now()
-    return next((event for event in _lesson_events(events) if event.start <= now < event.end), None)
+    return next(
+        (
+            event
+            for event in _lesson_events(events)
+            if not event.is_cancelled and event.start <= now < event.end
+        ),
+        None,
+    )
 
 
 def _next_lesson(events: list[MergedCalendarEvent]) -> MergedCalendarEvent | None:
     now = dt_util.now()
-    return next((event for event in _lesson_events(events) if event.start > now), None)
+    return next(
+        (event for event in _lesson_events(events) if not event.is_cancelled and event.start > now),
+        None,
+    )
 
 
 def _lessons_on(events: list[MergedCalendarEvent], offset: int) -> int:
@@ -202,7 +213,6 @@ class KretaCountSensor(KretaEntity, SensorEntity):
     ) -> None:
         super().__init__(entry, runtime)
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_name = name
         self._attr_translation_key = key
         self._value_fn = value_fn
 
@@ -224,8 +234,16 @@ class KretaLessonSensor(KretaEntity, SensorEntity):
     ) -> None:
         super().__init__(entry, runtime)
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_name = name
+        self._attr_translation_key = key
         self._selector = selector
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass, lambda _now: self.async_write_ha_state(), timedelta(minutes=1)
+            )
+        )
 
     def _event(self) -> MergedCalendarEvent | None:
         return self._selector(self.coordinator.data.events) if self.coordinator.data else None
@@ -280,7 +298,7 @@ class KretaLessonSensor(KretaEntity, SensorEntity):
 
 
 class KretaLatestGradeSensor(KretaEntity, SensorEntity):
-    _attr_name = "Latest grade"
+    _attr_translation_key = "latest_grade"
     _attr_icon = "mdi:school"
 
     def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
@@ -312,7 +330,7 @@ class KretaLatestGradeSensor(KretaEntity, SensorEntity):
 
 
 class KretaPreviousGradeSensor(KretaLatestGradeSensor):
-    _attr_name = "Previous grade"
+    _attr_translation_key = "previous_grade"
 
     def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
         super().__init__(entry, runtime)
@@ -329,7 +347,7 @@ class KretaPreviousGradeSensor(KretaLatestGradeSensor):
 
 
 class KretaGradeAverageSensor(KretaEntity, SensorEntity):
-    _attr_name = "Average"
+    _attr_translation_key = "grade_average"
     _attr_icon = "mdi:chart-line"
 
     def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
@@ -363,7 +381,7 @@ class KretaAbsenceStatusSensor(KretaCountSensor):
 
 
 class KretaNextTestSensor(KretaEntity, SensorEntity):
-    _attr_name = "Next test"
+    _attr_translation_key = "next_test"
     _attr_device_class = SensorDeviceClass.DATE
 
     def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
@@ -390,7 +408,7 @@ class KretaNextTestSensor(KretaEntity, SensorEntity):
 
 
 class KretaLatestMessageSensor(KretaEntity, SensorEntity):
-    _attr_name = "Latest message"
+    _attr_translation_key = "latest_message"
     _attr_icon = "mdi:email-outline"
 
     def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
@@ -418,12 +436,20 @@ class KretaLatestMessageSensor(KretaEntity, SensorEntity):
 
 
 class KretaSchoolStatusSensor(KretaEntity, SensorEntity):
-    _attr_name = "School status"
+    _attr_translation_key = "school_status"
     _attr_icon = "mdi:school-outline"
 
     def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
         super().__init__(entry, runtime)
         self._attr_unique_id = f"{entry.entry_id}_school_status"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass, lambda _now: self.async_write_ha_state(), timedelta(minutes=1)
+            )
+        )
 
     @property
     def native_value(self) -> str:
@@ -452,7 +478,7 @@ class KretaBriefSensor(KretaEntity, SensorEntity):
         self._offset = offset
         key = "today_summary" if offset == 0 else "tomorrow_summary"
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_name = "Today summary" if offset == 0 else "Tomorrow summary"
+        self._attr_translation_key = key
 
     @property
     def native_value(self) -> int | None:
@@ -487,7 +513,7 @@ class KretaBriefSensor(KretaEntity, SensorEntity):
 
 
 class KretaWeekSummarySensor(KretaEntity, SensorEntity):
-    _attr_name = "Week summary"
+    _attr_translation_key = "week_summary"
     _attr_icon = "mdi:calendar-week"
 
     def __init__(self, entry: ConfigEntry, runtime: KretaRuntimeData) -> None:
@@ -525,7 +551,7 @@ class KretaWeekSummarySensor(KretaEntity, SensorEntity):
 
 
 class KretaNextMilestoneSensor(KretaEntity, SensorEntity):
-    _attr_name = "Next school-year event"
+    _attr_translation_key = "next_school_year_event"
     _attr_device_class = SensorDeviceClass.DATE
     _attr_icon = "mdi:calendar-star"
 
@@ -560,7 +586,7 @@ class KretaNextMilestoneSensor(KretaEntity, SensorEntity):
 
 
 class KretaLastRefreshSensor(KretaEntity, SensorEntity):
-    _attr_name = "Last refresh"
+    _attr_translation_key = "last_refresh"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -574,7 +600,7 @@ class KretaLastRefreshSensor(KretaEntity, SensorEntity):
 
 
 class KretaUpdateStatusSensor(KretaEntity, SensorEntity):
-    _attr_name = "Connection status"
+    _attr_translation_key = "connection_status"
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = [
         "ok",

@@ -19,7 +19,7 @@ async def async_get_config_entry_diagnostics(
     coordinator = runtime.coordinator
     data = coordinator.data
     return {
-        "integration": "KRÉTA Secure",
+        "integration": "KRÉTA kliens",
         "config_entry_version": entry.version,
         "enabled_features": {
             feature: bool(entry.options.get(feature, True)) for feature in FEATURE_KEYS

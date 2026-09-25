@@ -6,7 +6,7 @@ refresh:
       name: Account
       description: Config entry ID. Optional when only one account exists.
       selector:
-        text:
+        text: {}
 get_day:
   name: Get day
   description: Return one day from the local KRÉTA cache.
@@ -14,12 +14,12 @@ get_day:
     entry_id:
       name: Account
       selector:
-        text:
+        text: {}
     date:
       name: Date
       required: true
       selector:
-        date:
+        date: {}
 get_week:
   name: Get week
   description: Return one week from the local KRÉTA cache.
@@ -27,12 +27,12 @@ get_week:
     entry_id:
       name: Account
       selector:
-        text:
+        text: {}
     date:
       name: Date
       required: true
       selector:
-        date:
+        date: {}
 get_grades:
   name: Get grades
   description: Return bounded normalized grades from the local KRÉTA cache.
@@ -40,7 +40,7 @@ get_grades:
     entry_id:
       name: Account
       selector:
-        text:
+        text: {}
     limit:
       name: Limit
       default: 20
@@ -51,7 +51,7 @@ get_grades:
     subject:
       name: Subject
       selector:
-        text:
+        text: {}
 get_tests:
   name: Get tests
   description: Return bounded upcoming tests from the local KRÉTA cache.
@@ -59,7 +59,7 @@ get_tests:
     entry_id:
       name: Account
       selector:
-        text:
+        text: {}
     limit:
       name: Limit
       default: 20
@@ -70,7 +70,7 @@ get_tests:
     subject:
       name: Subject
       selector:
-        text:
+        text: {}
 get_homework:
   name: Get homework
   description: Return bounded homework from the local KRÉTA cache.
@@ -78,7 +78,7 @@ get_homework:
     entry_id:
       name: Account
       selector:
-        text:
+        text: {}
     limit:
       name: Limit
       default: 20
@@ -89,4 +89,4 @@ get_homework:
     subject:
       name: Subject
       selector:
-        text:
+        text: {}

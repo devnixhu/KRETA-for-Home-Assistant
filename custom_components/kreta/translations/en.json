@@ -92,6 +92,24 @@
       "justified_absences": {"name": "Justified absences"},
       "unjustified_absences": {"name": "Unjustified absences"},
       "pending_absences": {"name": "Pending absences"}
+      ,"latest_grade": {"name": "Latest grade"}
+      ,"previous_grade": {"name": "Previous grade"}
+      ,"grade_average": {"name": "Grade average"}
+      ,"new_grades": {"name": "New grades"}
+      ,"upcoming_homework": {"name": "Upcoming homework"}
+      ,"next_test": {"name": "Next test"}
+      ,"tests_this_week": {"name": "Tests this week"}
+      ,"unread_messages": {"name": "Unread messages"}
+      ,"latest_message": {"name": "Latest message"}
+      ,"absences": {"name": "Absences"}
+      ,"late_arrivals": {"name": "Late arrivals"}
+      ,"school_status": {"name": "School status", "state": {"no_school": "No school", "before_school": "Before school", "after_school": "After school", "lesson": "In lesson", "break": "On break"}}
+      ,"today_summary": {"name": "Today summary"}
+      ,"tomorrow_summary": {"name": "Tomorrow summary"}
+      ,"week_summary": {"name": "Week summary"}
+      ,"next_school_year_event": {"name": "Next school-year event"}
+      ,"last_refresh": {"name": "Last refresh"}
+      ,"connection_status": {"name": "Connection status", "state": {"ok": "OK", "authentication_required": "Authentication required", "temporarily_unavailable": "Temporarily unavailable", "rate_limited": "Rate limited", "partial_data": "Partial data", "error": "Error"}}
     },
     "binary_sensor": {
       "school_day": {"name": "School day today"},
@@ -107,7 +125,9 @@
       "schedule_changed": {"name": "Schedule changed"},
       "substitution_today": {"name": "Substitution today"},
       "substitution_tomorrow": {"name": "Substitution tomorrow"}
-    }
+    },
+    "button": {"refresh": {"name": "Refresh"}},
+    "calendar": {"timetable": {"name": "Timetable"}}
   },
   "device_automation": {
     "trigger_type": {

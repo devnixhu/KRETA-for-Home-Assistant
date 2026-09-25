@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2.0.0
+
+### Added
+
+- A responsive KRÉTA client card with overview, timetable, grades, tests,
+  homework, changes, absences, and school-year views.
+- Graphical multi-account selection, grade filters and pagination, desktop
+  side navigation, and touch-friendly mobile navigation.
+- Normalized per-account cache, local query services, WebSocket commands,
+  school transition events, and device automation triggers.
+- Configurable 0-1440 minute refresh interval and 0-52 week history plus
+  1-52 week future ranges.
+
+### Changed
+
+- Home Assistant entities now act as automation and compatibility surfaces;
+  the client card is the primary human-facing interface.
+- Large API ranges are chunked and refresh only their changing or uncovered
+  windows.
+- OAuth remains on the consistent KRÉTA mobile client with strict PKCE,
+  callback, redirect, host, and TLS validation.
+
+### Security
+
+- Passwords and 2FA codes remain exclusively on the official KRÉTA page.
+- Tokens, authorization codes, cookies, credentials, and personal data are
+  excluded from logs and diagnostics.
+- API failures include only privacy-safe operation, endpoint, status, and
+  exception metadata.
+
 ## 1.7.6
 
 ### Fixed

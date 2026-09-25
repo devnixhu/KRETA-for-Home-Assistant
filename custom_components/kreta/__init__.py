@@ -76,20 +76,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: KretaConfigEntry) -> boo
 
     _LOGGER.info("KRÉTA Secure entry is ready")
 
-    scheduler = KretaTransitionScheduler(hass, entry.entry_id, coordinator)
+    scheduler = KretaTransitionScheduler(
+        hass,
+        entry.entry_id,
+        coordinator,
+        emit_events=entry.options.get(CONF_LESSON_EVENTS, True),
+    )
     hass.data[DOMAIN][entry.entry_id] = KretaRuntimeData(
         client=client,
         coordinator=coordinator,
         scheduler=scheduler,
     )
-    if entry.options.get(CONF_LESSON_EVENTS, True):
-        scheduler.async_reschedule()
-        entry.async_on_unload(coordinator.async_add_listener(scheduler.async_reschedule))
-        entry.async_on_unload(scheduler.async_cancel)
+    scheduler.async_reschedule()
+    entry.async_on_unload(coordinator.async_add_listener(scheduler.async_reschedule))
+    entry.async_on_unload(scheduler.async_cancel)
 
     async def _midnight_refresh(_now: datetime) -> None:
-        """Trigger a coordinator refresh after midnight to capture the new day's data."""
-        await coordinator.async_request_refresh()
+        """Update local states and transition timers after midnight."""
+        coordinator.async_update_listeners()
+        if coordinator.update_interval is not None:
+            await coordinator.async_request_refresh()
 
     entry.async_on_unload(
         async_track_time_change(hass, _midnight_refresh, hour=0, minute=0, second=30)
