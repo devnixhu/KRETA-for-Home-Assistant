@@ -1,4 +1,4 @@
-const KRETA_VIEWS = ["overview", "today", "tomorrow", "week", "grades", "tests", "homework", "changes", "absences", "messages", "school_year"];
+const KRETA_VIEWS = ["overview", "current", "today", "tomorrow", "week", "grades", "tests", "homework", "changes", "absences", "messages", "school_year"];
 const KRETA_BOOLEAN_OPTIONS = ["show_school_name", "show_teacher", "show_room", "show_lesson_number", "show_time", "show_progress", "show_next_lesson", "show_tests", "show_homework", "show_substitutions", "show_cancelled", "show_grade_statistics", "show_absences", "show_messages", "compact", "dense", "hide_empty_sections", "use_24_hour", "use_theme_color"];
 const KRETA_DEFAULTS = {view: "overview", show_school_name: true, show_teacher: true, show_room: true, show_lesson_number: true, show_time: true, show_progress: true, show_next_lesson: true, show_tests: true, show_homework: true, show_substitutions: true, show_cancelled: true, show_grade_statistics: true, show_absences: true, show_messages: true, compact: false, dense: false, days_to_show: 5, recent_grades: 10, upcoming_tests: 10, homework_entries: 10, first_lesson: 0, last_lesson: 10, hide_empty_sections: true, use_24_hour: true, use_theme_color: true, card_height: "auto", week_layout: "columns", mobile_layout: "scroll"};
 const KRETA_TEXT = {
@@ -6,7 +6,7 @@ const KRETA_TEXT = {
   en: {overview: "Overview", today: "Today", tomorrow: "Tomorrow", week: "Week", grades: "Grades", tests: "Tests", homework: "Homework", changes: "Changes", absences: "Absences", messages: "Messages", school_year: "School year", current: "Current lesson", next: "Next", noSchool: "No school", empty: "No data to display", loading: "Loading KRÉTA data…", error: "KRÉTA data is temporarily unavailable", partial: "Some KRÉTA data is temporarily unavailable", remaining: "minutes remaining", total: "Total", lastUpdate: "Last update", search: "Search", subject: "Subject", all: "All", from: "From", to: "To", oldest: "Oldest first", newest: "Newest first", loadMore: "More grades", unweighted: "Unweighted average", weighted: "Weighted average", daysRemaining: "days remaining", overdue: "Overdue", unread: "unread", justified: "Justified", unjustified: "Unjustified", pending: "Pending", lateMinutes: "Late minutes", late_arrivals: "Late arrivals", this_month: "This month", thisWeek: "This week", later: "Later", nextBreak: "Next school-year event"}
 };
 const KRETA_EDITOR_HU = {entry_id: "KRÉTA-fiók", view: "Nézet", title: "Cím", show_school_name: "Iskola neve", show_teacher: "Tanár", show_room: "Terem", show_lesson_number: "Óraszám", show_time: "Időpont", show_progress: "Órahaladás", show_next_lesson: "Következő óra", show_tests: "Dolgozatok", show_homework: "Házi feladat", show_substitutions: "Helyettesítések", show_cancelled: "Elmaradt órák", show_grade_statistics: "Jegystatisztika", show_absences: "Hiányzások", show_messages: "Üzenetek", compact: "Kompakt", dense: "Sűrű", days_to_show: "Napok száma", recent_grades: "Legutóbbi jegyek száma", upcoming_tests: "Közelgő dolgozatok száma", homework_entries: "Házi feladatok száma", first_lesson: "Első óraszám", last_lesson: "Utolsó óraszám", hide_empty_sections: "Üres részek elrejtése", use_24_hour: "24 órás idő", accent_color: "Kiemelőszín", use_theme_color: "HA-téma színe", card_height: "Kártyamagasság", week_layout: "Heti elrendezés", mobile_layout: "Mobil elrendezés"};
-const KRETA_VIEW_ICONS = {overview: "⌂", today: "●", tomorrow: "→", week: "▦", grades: "★", tests: "✎", homework: "✓", changes: "↻", absences: "!", messages: "✉", school_year: "◇"};
+const KRETA_VIEW_ICONS = {overview: "⌂", current: "▶", today: "●", tomorrow: "→", week: "▦", grades: "★", tests: "✎", homework: "✓", changes: "↻", absences: "!", messages: "✉", school_year: "◇"};
 
 function kretaNode(tag, className, text) {
   const node = document.createElement(tag);
@@ -71,6 +71,7 @@ class KretaDashboardCard extends HTMLElement {
   }
 
   getCardSize() {
+    if (this._config?.view === "current") return 3;
     return this._config?.view === "week" ? 8 : 6;
   }
 
@@ -146,7 +147,7 @@ class KretaDashboardCard extends HTMLElement {
     style.textContent = `
       :host{display:block}.card{height:var(--kreta-height,auto);overflow:auto;color:var(--primary-text-color);background:var(--ha-card-background,var(--card-background-color));border-radius:var(--ha-card-border-radius,12px);box-shadow:var(--ha-card-box-shadow);font-family:var(--paper-font-body1_-_font-family,inherit)}
       .wrap{padding:18px;display:grid;gap:16px}.dense .wrap{padding:12px;gap:10px}.head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding-bottom:2px}.title{font-size:22px;font-weight:650}.muted{color:var(--secondary-text-color);font-size:13px}.status{width:9px;height:9px;border-radius:50%;background:var(--success-color,#43a047);display:inline-block;margin-right:6px}.status.partial{background:var(--warning-color,#ffa000)}
-      .appShell{display:grid;grid-template-columns:174px minmax(0,1fr);gap:18px;align-items:start}.clientContent{min-width:0;display:block}nav{position:sticky;top:8px;display:grid;gap:5px;align-content:start;padding:7px;border-radius:14px;background:var(--secondary-background-color)}nav button{display:grid;grid-template-columns:28px 1fr;align-items:center;text-align:left;gap:7px;min-height:44px;border:0;border-radius:10px;padding:0 11px;background:transparent;color:var(--primary-text-color);cursor:pointer;white-space:nowrap}.navIcon{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;font-size:15px;background:color-mix(in srgb,var(--primary-text-color) 8%,transparent)}nav button.active{background:var(--kreta-accent,var(--primary-color));color:var(--text-primary-color,#fff)}nav button.active .navIcon{background:color-mix(in srgb,#fff 18%,transparent)}button:focus-visible,.lesson:focus-visible{outline:2px solid var(--kreta-accent,var(--primary-color));outline-offset:2px}
+      .appShell{display:grid;grid-template-columns:174px minmax(0,1fr);gap:18px;align-items:start}.appShell.singleView{display:block}.clientContent{min-width:0;display:block}nav{position:sticky;top:8px;display:grid;gap:5px;align-content:start;padding:7px;border-radius:14px;background:var(--secondary-background-color)}nav button{display:grid;grid-template-columns:28px 1fr;align-items:center;text-align:left;gap:7px;min-height:44px;border:0;border-radius:10px;padding:0 11px;background:transparent;color:var(--primary-text-color);cursor:pointer;white-space:nowrap}.navIcon{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;font-size:15px;background:color-mix(in srgb,var(--primary-text-color) 8%,transparent)}nav button.active{background:var(--kreta-accent,var(--primary-color));color:var(--text-primary-color,#fff)}nav button.active .navIcon{background:color-mix(in srgb,#fff 18%,transparent)}button:focus-visible,.lesson:focus-visible{outline:2px solid var(--kreta-accent,var(--primary-color));outline-offset:2px}
       .hero{padding:18px;border-radius:14px;background:color-mix(in srgb,var(--kreta-accent,var(--primary-color)) 12%,var(--card-background-color));display:grid;gap:7px}.hero h2{margin:0;font-size:25px}.heroRow{display:flex;gap:14px;flex-wrap:wrap}.progress{height:7px;background:var(--divider-color);border-radius:8px;overflow:hidden}.bar{height:100%;background:var(--kreta-accent,var(--primary-color));transition:width .25s ease}
       .section{display:grid;gap:9px}.section h3{margin:0;font-size:16px}.lesson,.row{display:grid;grid-template-columns:64px minmax(100px,1fr) auto;gap:12px;align-items:center;padding:11px;border:1px solid var(--divider-color);border-radius:11px;min-height:44px}.lesson.current{border-color:var(--kreta-accent,var(--primary-color));background:color-mix(in srgb,var(--kreta-accent,var(--primary-color)) 8%,transparent)}.lesson.cancelled{opacity:.65;text-decoration:line-through}.subject{font-weight:600}.meta{font-size:13px;color:var(--secondary-text-color)}.badges{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}.badge{border-radius:10px;padding:2px 7px;font-size:11px;background:var(--secondary-background-color)}
       .week{display:grid;grid-template-columns:repeat(5,minmax(190px,1fr));gap:10px;overflow:auto}.stacked .week{grid-template-columns:1fr}.day{display:grid;align-content:start;gap:8px;min-width:190px;padding:7px;border-radius:12px}.day.today{background:color-mix(in srgb,var(--kreta-accent,var(--primary-color)) 7%,transparent)}.day h3{position:sticky;top:0;background:var(--card-background-color);padding:6px 0;z-index:1}.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:9px}.stat{padding:12px;border-radius:10px;background:var(--secondary-background-color)}.stat strong{display:block;font-size:20px}.group{display:grid;gap:8px;margin-top:5px}.groupTitle{font-size:13px;font-weight:650;color:var(--secondary-text-color);text-transform:uppercase;letter-spacing:.04em}.empty,.error,.loading{padding:34px;text-align:center;color:var(--secondary-text-color)}
@@ -162,13 +163,14 @@ class KretaDashboardCard extends HTMLElement {
     card.style.setProperty("--kreta-height", this._config.card_height || "auto");
     if (!this._config.use_theme_color && this._config.accent_color) card.style.setProperty("--kreta-accent", this._config.accent_color);
     const wrap = kretaNode("div", "wrap");
-    const shell = kretaNode("div", "appShell");
+    const shell = kretaNode("div", `appShell${this._config.single_view ? " singleView" : ""}`);
     const content = kretaNode("main", "clientContent");
     if (this._loading && !this._data) content.append(kretaNode("div", "loading", this._text("loading")));
     else if (this._error) content.append(kretaNode("div", "error", this._text("error")));
     else if (!this._config.entry_id) content.append(kretaNode("div", "empty", this._language === "hu" ? "Válassz KRÉTA-fiókot a kártyaszerkesztőben" : "Select a KRÉTA account in the card editor"));
     else if (this._data) content.append(this._content());
-    shell.append(this._navigation(), content);
+    if (this._config.single_view) shell.append(content);
+    else shell.append(this._navigation(), content);
     wrap.append(this._header(), shell);
     card.append(wrap);
     this.shadowRoot.replaceChildren(this._style(), card);
@@ -213,6 +215,7 @@ class KretaDashboardCard extends HTMLElement {
   _content() {
     const view = this._config.view;
     if (view === "overview") return this._overview();
+    if (view === "current") return this._currentLessonView();
     if (view === "today" || view === "tomorrow") return this._agenda(this._data.lessons, this._text(view));
     if (view === "week") return this._week();
     if (view === "grades") return this._grades();
@@ -223,6 +226,14 @@ class KretaDashboardCard extends HTMLElement {
     if (view === "messages") return this._messages();
     if (view === "school_year") return this._schoolYear();
     return this._generic(view, this._data.items || []);
+  }
+
+  _currentLessonView() {
+    const content = kretaNode("div", "section");
+    if (this._data.current_lesson) content.append(this._hero(this._data.current_lesson));
+    else content.append(kretaNode("div", "empty", this._text("noSchool")));
+    if (this._config.show_next_lesson && this._data.next_lesson) content.append(this._next(this._data.next_lesson));
+    return content;
   }
 
   _overview() {
@@ -647,4 +658,31 @@ class KretaDashboardCardEditor extends HTMLElement {
 if (!customElements.get("kreta-dashboard-card")) customElements.define("kreta-dashboard-card", KretaDashboardCard);
 if (!customElements.get("kreta-dashboard-card-editor")) customElements.define("kreta-dashboard-card-editor", KretaDashboardCardEditor);
 window.customCards = window.customCards || [];
-if (!window.customCards.some((card) => card.type === "kreta-dashboard-card")) window.customCards.push({type: "kreta-dashboard-card", name: "KRÉTA kliens", description: "Reszponzív KRÉTA-kliens órarenddel és tanulmányi adatokkal", preview: true});
+
+function kretaRegisterCard(type, name, description, view, defaults = {}) {
+  if (type !== "kreta-dashboard-card" && !customElements.get(type)) {
+    customElements.define(type, class extends KretaDashboardCard {
+      static getStubConfig() {
+        return {type: `custom:${type}`, ...KRETA_DEFAULTS, ...defaults, view};
+      }
+
+      setConfig(config) {
+        super.setConfig({...defaults, ...config, view: config.view || view});
+      }
+    });
+  }
+  if (!window.customCards.some((card) => card.type === type)) window.customCards.push({type, name, description, preview: true});
+}
+
+kretaRegisterCard("kreta-dashboard-card", "KRÉTA kliens", "Teljes, reszponzív KRÉTA-kliens minden tanulmányi nézettel", "overview");
+kretaRegisterCard("kreta-current-lesson-card", "KRÉTA aktuális óra", "Aktuális és következő óra helyi időzítéssel", "current", {compact: true, single_view: true});
+kretaRegisterCard("kreta-timetable-card", "KRÉTA napi órarend", "Mai órarend részletes óralistával", "today", {single_view: true});
+kretaRegisterCard("kreta-tomorrow-card", "KRÉTA holnapi órarend", "A teljes holnapi órarend külön kártyán", "tomorrow", {single_view: true});
+kretaRegisterCard("kreta-week-card", "KRÉTA heti órarend", "Reszponzív hétfőtől péntekig tartó órarend", "week", {single_view: true});
+kretaRegisterCard("kreta-grades-card", "KRÉTA jegyek", "Jegyek, keresés, szűrés, átlagok és statisztikák", "grades", {single_view: true});
+kretaRegisterCard("kreta-tests-card", "KRÉTA dolgozatok", "Közelgő dolgozatok és hátralévő napok", "tests", {single_view: true});
+kretaRegisterCard("kreta-homework-card", "KRÉTA házi feladatok", "Határidő szerint csoportosított házi feladatok", "homework", {single_view: true});
+kretaRegisterCard("kreta-changes-card", "KRÉTA órarendváltozások", "Helyettesítések, terem- és tanárváltozások", "changes", {single_view: true});
+kretaRegisterCard("kreta-absences-card", "KRÉTA hiányzások", "Hiányzási és késési összesítők részletes előzményekkel", "absences", {single_view: true});
+kretaRegisterCard("kreta-messages-card", "KRÉTA üzenetek", "Adatvédelmi szempontból minimalizált üzenetlista", "messages", {single_view: true});
+kretaRegisterCard("kreta-school-year-card", "KRÉTA tanév", "Szünetek, ünnepnapok és tanévi események", "school_year", {single_view: true});

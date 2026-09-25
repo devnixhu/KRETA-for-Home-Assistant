@@ -57,7 +57,7 @@ async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     await hass.http.async_register_static_paths(
         [StaticPathConfig("/kreta_static", str(frontend_path), cache_headers=True)]
     )
-    add_extra_js_url(hass, "/kreta_static/kreta-dashboard-card.js")
+    add_extra_js_url(hass, "/kreta_static/kreta-dashboard-card.js?v=2.0.0")
     return True
 
 

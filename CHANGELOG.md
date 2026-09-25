@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
 
 - A responsive KRÉTA client card with overview, timetable, grades, tests,
   homework, changes, absences, and school-year views.
+- Dedicated current lesson, daily, tomorrow, weekly, grades, tests, homework,
+  changes, absences, messages, and school-year cards in the HA card picker.
 - Graphical multi-account selection, grade filters and pagination, desktop
   side navigation, and touch-friendly mobile navigation.
 - Normalized per-account cache, local query services, WebSocket commands,

@@ -58,6 +58,36 @@ type: custom:kreta-dashboard-card
 view: overview
 ```
 
+Az **Add card** keresőben külön, navigáció nélküli KRÉTA-kártyák is megjelennek:
+
+- KRÉTA aktuális óra
+- KRÉTA napi órarend
+- KRÉTA holnapi órarend
+- KRÉTA heti órarend
+- KRÉTA jegyek
+- KRÉTA dolgozatok
+- KRÉTA házi feladatok
+- KRÉTA órarendváltozások
+- KRÉTA hiányzások
+- KRÉTA üzenetek
+- KRÉTA tanév
+
+Például egy külön jegykártya:
+
+```yaml
+type: custom:kreta-grades-card
+recent_grades: 20
+show_grade_statistics: true
+```
+
+Egy kompakt aktuálisóra-kártya:
+
+```yaml
+type: custom:kreta-current-lesson-card
+show_progress: true
+show_next_lesson: true
+```
+
 Ha csak egy KRÉTA-fiók van beállítva, a kártya automatikusan kiválasztja. Több fióknál a grafikus kártyaszerkesztőben választható ki a tanuló. Ugyanott állítható a kezdőnézet, a megjelenített adatok, az időformátum, a sűrűség, a heti és mobil elrendezés, valamint a kiemelőszín.
 
 ## Adatfrissítés és gyorsítótár

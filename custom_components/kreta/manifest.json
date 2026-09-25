@@ -7,7 +7,7 @@
   "config_flow": true,
   "documentation": "https://github.com/devnixhu/KRETA-for-Home-Assistant",
   "issue_tracker": "https://github.com/devnixhu/KRETA-for-Home-Assistant/issues",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "dependencies": [
     "frontend",
     "http",
